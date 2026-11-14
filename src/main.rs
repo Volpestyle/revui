@@ -1933,15 +1933,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some("format"), _) => return Ok(print!("{}", include_str!("../FORMAT.md"))),
         (Some("fetch"), Some(url)) => return Ok(println!("{}", mrs::fetch(url)?.display())),
         (Some("queue"), _) => {
-            for (url, dir, guide) in mrs::queue() {
+            let (waiting, problems) = mrs::queue();
+            for (url, dir, guide) in waiting {
                 println!("{}\t{url}\t{}", if guide { "guide" } else { "no guide" }, dir.display());
             }
-            return Ok(());
+            problems.iter().for_each(|problem| eprintln!("could not ask {problem}"));
+            std::process::exit(if problems.is_empty() { 0 } else { 1 });
         }
         (Some("prepare"), link) => {
-            let named = link.map(|link| mrs::fetch(link).map(|dir| vec![(link.clone(), dir, false)])).transpose()?;
-            let mut failed = false;
-            for (url, dir, _) in named.unwrap_or_else(mrs::queue).into_iter().filter(|(_, dir, guide)| !guide && !mrs::has_guide(dir)) {
+            let named = link.map(|link| mrs::fetch(link).map(|dir| (vec![(link.clone(), dir, false)], Vec::new()))).transpose()?;
+            let (waiting, problems) = named.unwrap_or_else(mrs::queue);
+            problems.iter().for_each(|problem| eprintln!("could not ask {problem}"));
+            let mut failed = !problems.is_empty();
+            for (url, dir, _) in waiting.into_iter().filter(|(_, dir, _)| !mrs::finished_guide(dir)) {
                 match mrs::prepare(&url, &dir) {
                     Ok(()) => println!("guide written: {url}\t{}", dir.display()),
                     Err(problem) => {

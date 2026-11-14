@@ -62,6 +62,9 @@ there when you sit down.
 It runs the `prepare` command of the config, which has to finish without asking
 anything. It gets the same variables as `generate`, and `$REVUI_PROMPT` holds what
 revui would tell an agent. What it prints goes to `generate.log` in the bundle.
+A guide the command leaves half written counts as a failure, and the next run
+takes it up again. `revui queue` and `revui prepare` exit 1 when a host could not
+be asked, so a scheduler notices a lapsed sign-in.
 
     "prepare": "claude -p \"$REVUI_PROMPT\" --allowedTools Bash,Read,Write,Edit,Glob,Grep"
 
@@ -75,10 +78,23 @@ text steer.
 A project can write the guide in its pipeline, so everyone who opens the merge
 request reads the same one and nobody waits for a review to start. revui looks for
 it whenever a merge request has no guide here: on GitLab the artifact of a job named
-`revui-guide` in the merge request's pipeline for the current head, on GitHub an
-artifact named `revui-guide` from a workflow run on the head commit. It holds
-`review.json` and `assets/`. A guide for another head, or one that does not fit the
-diff, is ignored.
+`revui-guide` in the merge request's pipeline for the current head (or its newest
+pipeline, which is what a merged-results pipeline is), on GitHub an artifact named
+`revui-guide` from a workflow run on the head commit. It holds `review.json` and
+`assets/`. A guide for another head, an unfinished one, or one that does not fit
+the diff is ignored.
+
+Whoever can run a pipeline on the merge request's branch can write that artifact,
+and that includes the author of the change. So a guide from CI says so at the top
+of its summary and on its row under your reviews, and you should read it as the
+author's pipeline speaking, not as your own agent. Runs from forks are never used.
+Links inside the artifact are not followed, and a guide whose evidence names a file
+outside the bundle is ignored.
+
+Marks carry from one head to the next only for findings that read the same, and a
+pipeline that starts from nothing each time writes them afresh. For marks to follow
+a CI guide, the job has to keep its bundles between runs (cache `REVUI_HOME`), so
+the agent updates the earlier guide instead of writing a new one.
 
 `examples/ci/` has a job for each host. Both install revui and an agent, run
 `revui prepare <link>`, and keep the bundle as the artifact. They are starting

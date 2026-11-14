@@ -240,29 +240,50 @@ pub fn guide_prompt(url: &str, dir: &str) -> String {
     format!("Review {url} and write its revui guide into {dir}. Run `revui skill guide` first and follow it.")
 }
 
-/// Open merge requests and pull requests that ask for your review and are not drafts, as links.
-pub fn requested() -> Vec<String> {
-    let list = |json: Result<String, String>, key: &str| -> Vec<String> {
-        let found: Vec<serde_json::Value> = json.ok().and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
-        found.iter().filter(|one| one["draft"] != true && one["isDraft"] != true).filter_map(|one| one[key].as_str().map(String::from)).collect()
+/// Open merge requests and pull requests that ask for your review and are not drafts, as links, and each host that
+/// could not be asked. A host whose CLI is not installed is left out, unless neither is.
+pub fn requested() -> (Vec<String>, Vec<String>) {
+    let installed = |program: &str| Command::new(program).arg("--version").output().is_ok();
+    let (mut urls, mut problems) = (Vec::new(), Vec::new());
+    let mut list = |host: &str, json: Result<String, String>, key: &str| {
+        match json.and_then(|json| serde_json::from_str::<Vec<serde_json::Value>>(&json).map_err(|e| e.to_string())) {
+            Ok(found) => urls.extend(found.iter().filter(|one| one["draft"] != true && one["isDraft"] != true).filter_map(|one| one[key].as_str().map(String::from))),
+            Err(problem) => problems.push(format!("{host}: {problem}")),
+        }
     };
-    let mut urls = list(gh(&["search", "prs", "--review-requested=@me", "--state=open", "--json", "url,isDraft", "--limit", "50"]), "url");
-    let me = glab(&["api", "user"]).ok().and_then(|user| serde_json::from_str::<serde_json::Value>(&user).ok());
-    if let Some(me) = me.as_ref().and_then(|me| me["username"].as_str()) {
-        urls.extend(list(glab(&["api", &format!("merge_requests?scope=all&state=opened&reviewer_username={me}&per_page=50")]), "web_url"));
+    let (github, gitlab) = (installed("gh"), installed("glab"));
+    if github || !gitlab {
+        list("GitHub", gh(&["search", "prs", "--review-requested=@me", "--state=open", "--json", "url,isDraft", "--limit", "50"]), "url");
     }
-    urls
+    if gitlab || !github {
+        let me = glab(&["api", "user"]).and_then(|user| {
+            let user = serde_json::from_str::<serde_json::Value>(&user).map_err(|e| e.to_string())?;
+            user["username"].as_str().map(String::from).ok_or("could not read your username".to_string())
+        });
+        list("GitLab", me.and_then(|me| glab(&["api", &format!("merge_requests?scope=all&state=opened&reviewer_username={me}&per_page=50")])), "web_url");
+    }
+    (urls, problems)
 }
 
-/// A bundle for each of them, marked as waiting for you: the link, its directory, and whether its current head has a guide.
-pub fn queue() -> Vec<(String, PathBuf, bool)> {
+/// A bundle for each of them, marked as waiting for you: the link, its directory, and whether its current head has a
+/// finished guide. A bundle marked before loses the mark once its host no longer lists it. The hosts that could not
+/// be asked come back too, and their marks stay.
+pub fn queue() -> (Vec<(String, PathBuf, bool)>, Vec<String>) {
+    let (urls, problems) = requested();
+    let marked = fs::read_dir(data_dir()).into_iter().flatten().flatten().filter_map(|entry| past(&entry.path())).filter(|past| past.requested);
+    for past in marked.filter(|past| !urls.contains(&past.url)) {
+        let host = if on_github(&past.reference) { "GitHub" } else { "GitLab" };
+        if !problems.iter().any(|problem| problem.starts_with(host)) {
+            let _ = fs::remove_file(past.dir.join("requested"));
+        }
+    }
     let bundle = |url: String| {
         let dir = fetch(&url).ok()?;
         let _ = fs::write(dir.join("requested"), "");
-        let guide = has_guide(&dir);
+        let guide = finished_guide(&dir);
         Some((url, dir, guide))
     };
-    requested().into_iter().filter_map(bundle).collect()
+    (urls.into_iter().filter_map(bundle).collect(), problems)
 }
 
 /// Writes the guide for a bundle with no one watching, by the `prepare` command of the config.
@@ -272,9 +293,10 @@ pub fn prepare(url: &str, dir: &Path) -> Result<(), String> {
     let mut command = Command::new("sh");
     command.args(["-c", &script]).env("REVUI_CLAUDE", claude()).env("REVUI_URL", url).env("REVUI_DIR", dir).env("REVUI_PROMPT", guide_prompt(url, &dir.to_string_lossy()));
     let ran = command.stdin(std::process::Stdio::null()).stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log).status();
-    match (ran, has_guide(dir)) {
-        (Ok(status), true) if status.success() => Ok(()),
-        (Err(e), _) => Err(format!("could not run `{script}`: {e}")),
+    match (ran, finished_guide(dir), has_guide(dir)) {
+        (Ok(status), true, _) if status.success() => Ok(()),
+        (Err(e), _, _) => Err(format!("could not run `{script}`: {e}")),
+        (_, _, true) => Err(format!("the guide was left unfinished: see {}", dir.join("generate.log").display())),
         _ => Err(format!("no guide was written: see {}", dir.join("generate.log").display())),
     }
 }
@@ -567,58 +589,82 @@ pub fn has_guide(dir: &Path) -> bool {
     review.is_some_and(|v| v["sections"].as_array().is_some_and(|a| !a.is_empty()))
 }
 
-const CI_JOB: &str = "revui-guide";
+/// A guide with every part reviewed: it has sections and no `working` left.
+pub fn finished_guide(dir: &Path) -> bool {
+    let review = fs::read_to_string(dir.join("review.json")).ok();
+    let review = review.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    has_guide(dir) && review.is_some_and(|v| v["working"].as_str().unwrap_or("").trim().is_empty())
+}
 
+const CI_JOB: &str = "revui-guide";
+const FROM_CI: &str = "This guide was written by the project's pipeline, not by your agent.";
+
+/// Copies files and directories only: a link in an artifact could point anywhere on this machine.
 fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
-        match entry.file_type()?.is_dir() {
-            true => copy_dir(&entry.path(), &to.join(entry.file_name()))?,
-            false => drop(fs::copy(entry.path(), to.join(entry.file_name()))?),
+        let kind = entry.file_type()?;
+        match (kind.is_dir(), kind.is_file()) {
+            (true, _) => copy_dir(&entry.path(), &to.join(entry.file_name()))?,
+            (_, true) => drop(fs::copy(entry.path(), to.join(entry.file_name()))?),
+            _ => {}
         }
     }
     Ok(())
 }
 
 /// Takes a guide someone else wrote for this head (a CI job) into a bundle that has none. The bundle keeps its own
-/// title, sources and patch, and stays as it was when the guide is for another head or does not load against the patch.
+/// title, sources and patch, and stays as it was when the guide is for another head, is unfinished, does not load
+/// against the patch, or names a file outside the bundle. The guide says where it came from.
 pub fn adopt(inbox: &Path, dir: &Path) -> bool {
-    let Some(from) = [inbox.to_path_buf(), inbox.join(CI_JOB)].into_iter().find(|from| from.join("review.json").exists()) else { return false };
+    let real = |path: &Path, folder: bool| fs::symlink_metadata(path).is_ok_and(|kind| if folder { kind.is_dir() } else { kind.is_file() });
+    let Some(from) = [inbox.to_path_buf(), inbox.join(CI_JOB)].into_iter().find(|from| real(from, true) && real(&from.join("review.json"), false)) else { return false };
     let read = |path: PathBuf| fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
     let (Some(mut guide), Some(own)) = (read(from.join("review.json")), read(dir.join("review.json"))) else { return false };
     let head = |review: &serde_json::Value| review["sources"][0]["head_sha"].as_str().map(String::from);
-    if head(&guide).is_none() || head(&guide) != head(&own) || guide["sections"].as_array().is_none_or(Vec::is_empty) {
+    let unfinished = guide["sections"].as_array().is_none_or(Vec::is_empty) || !guide["working"].as_str().unwrap_or("").trim().is_empty();
+    let evidence = guide["items"].as_array().into_iter().flatten().flat_map(|item| item["evidence"].as_array().into_iter().flatten());
+    let outside = evidence.filter_map(|one| one["path"].as_str()).any(|path| Path::new(path).components().any(|part| !matches!(part, std::path::Component::Normal(_))));
+    if head(&guide).is_none() || head(&guide) != head(&own) || unfinished || outside {
         return false;
     }
     (guide["title"], guide["sources"]) = (own["title"].clone(), own["sources"].clone());
-    guide.as_object_mut().map(|guide| guide.remove("working"));
+    guide["summary"] = format!("{FROM_CI} {}", guide["summary"].as_str().unwrap_or("")).trim().into();
     let before = fs::read_to_string(dir.join("review.json")).unwrap_or_default();
-    let copied = if from.join("assets").is_dir() { copy_dir(&from.join("assets"), &dir.join("assets")) } else { Ok(()) };
-    let written = copied.and_then(|_| fs::write(dir.join("review.json"), serde_json::to_string_pretty(&guide)?));
+    let written = serde_json::to_string_pretty(&guide).map_err(io::Error::from).and_then(|guide| fs::write(dir.join("review.json"), guide));
     if written.is_err() || Bundle::load(dir).is_err() {
         let _ = fs::write(dir.join("review.json"), before);
         return false;
     }
+    if real(&from.join("assets"), true) {
+        let _ = copy_dir(&from.join("assets"), &dir.join("assets"));
+    }
+    let _ = fs::write(dir.join("from-ci"), "");
     true
 }
 
 impl Mr {
-    /// Looks for a guide the project's CI wrote for this head: the artifact of a job named `revui-guide`.
+    /// Looks for a guide the project's CI wrote for this head: the artifact of a job named `revui-guide`, never one
+    /// from a fork's run. A merged-results pipeline has its own commit, so the newest pipeline is tried when none has
+    /// the head's, and `adopt` turns it down unless the guide inside names this head.
     fn ci_guide(&self, dir: &Path) -> bool {
         let inbox = dir.join("ci");
         let _ = fs::remove_dir_all(&inbox);
         let json = |out: Result<String, String>| out.ok().and_then(|out| serde_json::from_str::<Vec<serde_json::Value>>(&out).ok()).unwrap_or_default();
         let fetched = match self.github() {
             true => {
-                let runs = json(gh(&["run", "list", "-R", self.repo(), "--commit", self.sha(), "--json", "databaseId", "--limit", "20"]));
-                let ids = runs.iter().filter_map(|run| run["databaseId"].as_u64());
-                ids.map(|id| id.to_string()).any(|id| gh(&["run", "download", &id, "-R", self.repo(), "-n", CI_JOB, "-D", &inbox.to_string_lossy()]).is_ok())
+                let listed = gh(&["api", &format!("repos/{}/actions/artifacts?name={CI_JOB}&per_page=100", self.repo())]).ok();
+                let listed = listed.and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok()).unwrap_or_default();
+                let ours = |run: &serde_json::Value| run["head_sha"] == self.sha() && run["head_repository_id"].is_u64() && run["head_repository_id"] == run["repository_id"];
+                let artifact = listed["artifacts"].as_array().into_iter().flatten().find(|artifact| artifact["expired"] != true && ours(&artifact["workflow_run"]));
+                let run = artifact.and_then(|artifact| artifact["workflow_run"]["id"].as_u64()).map(|id| id.to_string());
+                run.is_some_and(|id| gh(&["run", "download", &id, "-R", self.repo(), "-n", CI_JOB, "-D", &inbox.to_string_lossy()]).is_ok())
             }
             false => {
                 let project = format!("projects/{}", crate::url_encode(self.repo()));
                 let pipelines = json(glab(&["api", &format!("{project}/merge_requests/{}/pipelines?per_page=20", self.iid)]));
-                let pipeline = pipelines.iter().find(|pipeline| pipeline["sha"] == self.sha()).and_then(|pipeline| pipeline["id"].as_u64());
+                let pipeline = pipelines.iter().find(|pipeline| pipeline["sha"] == self.sha()).or(pipelines.first()).and_then(|pipeline| pipeline["id"].as_u64());
                 let jobs = pipeline.map(|id| json(glab(&["api", &format!("{project}/pipelines/{id}/jobs?per_page=100")]))).unwrap_or_default();
                 let job = jobs.iter().find(|job| job["name"] == CI_JOB && job["artifacts_file"].is_object()).and_then(|job| job["id"].as_u64());
                 let zip = dir.join("ci.zip");
@@ -719,6 +765,7 @@ struct Past {
     author: String,
     guide: bool,
     requested: bool,
+    from_ci: bool,
     items: usize,
     working: String,
     marked: usize,
@@ -755,6 +802,7 @@ fn past(dir: &Path) -> Option<Past> {
         author: text(&source["author"]),
         guide: count(&review["sections"]) > 0,
         requested: dir.join("requested").exists(),
+        from_ci: dir.join("from-ci").exists(),
         items: count(&review["items"]),
         working: text(&review["working"]),
         marked: state["verdicts"].as_object().map_or(0, |verdicts| verdicts.len()),
@@ -942,6 +990,7 @@ impl Home {
                     (false, false) if past.requested => facts.push("asks for your review".to_string()),
                     _ => {}
                 }
+                facts.extend((past.guide && past.from_ci).then(|| "guide from CI".to_string()));
                 facts.extend((past.guide && past.items > 0 && past.marked > 0).then(|| format!("{} of {} marked", past.marked, past.items)));
                 facts.extend((past.drafts > 0).then(|| format!("{} unpublished", past.drafts)));
                 facts.extend(past.done.as_ref().map(|how| format!("review {how}")));
@@ -1181,13 +1230,16 @@ pub fn browse(terminal: &mut DefaultTerminal, images: Picker, first: Option<Stri
             KeyCode::Char('r') => home.scan(),
             KeyCode::Char('w') => {
                 home.busy = Some("Looking for merge requests waiting for your review".into());
-                let found = crate::wait(terminal, |frame| home.draw(frame), queue)?;
+                let (found, problems) = crate::wait(terminal, |frame| home.draw(frame), queue)?;
                 home.busy = None;
-                home.message = match (found.len(), found.iter().filter(|(_, _, guide)| !guide).count()) {
+                let waiting = match (found.len(), found.iter().filter(|(_, _, guide)| !guide).count()) {
+                    (0, _) if !problems.is_empty() => String::new(),
                     (0, _) => "Nothing is waiting for your review.".into(),
                     (all, 0) => format!("{all} waiting for your review, each with a guide."),
-                    (all, bare) => format!("{all} waiting for your review, {bare} with no guide yet: enter starts one."),
+                    (all, bare) => format!("{all} waiting for your review, {bare} with no finished guide yet: enter starts one."),
                 };
+                let unasked = if problems.is_empty() { String::new() } else { format!("Could not ask {}.", problems.join("; ")) };
+                home.message = format!("{waiting} {unasked}").trim().to_string();
                 home.scan();
             }
             KeyCode::F(12) if home.tabs.is_empty() => home.message = "No agent is open: one starts when you paste a link.".into(),
@@ -1379,9 +1431,16 @@ fn a_guide_written_elsewhere_is_taken_only_for_the_same_head() {
         fs::write(inbox.join("review.json"), guide(head, file)).unwrap();
         assert!(!adopt(inbox.parent().unwrap(), &dir) && fs::read_to_string(dir.join("review.json")).unwrap() == empty, "{head} {file} leaves the bundle as it was");
     }
-    fs::write(inbox.join("review.json"), guide("5d6e7f8a9b0c", "a.ts")).unwrap();
-    assert!(adopt(inbox.parent().unwrap(), &dir) && has_guide(&dir) && dir.join("assets/flow.png").exists());
+    let whole = guide("5d6e7f8a9b0c", "a.ts").replace("Reviewing part 1 of 1", "");
+    let reaching = whole.replace(r#""items": []"#, r#""items": [{"id": "F1", "kind": "finding", "title": "t", "body": "b", "evidence": [{"provenance": "observed", "caption": "c", "path": "../../.ssh/id_ed25519"}]}]"#);
+    for (refused, why) in [(guide("5d6e7f8a9b0c", "a.ts"), "an unfinished guide"), (reaching, "a guide naming a file outside the bundle")] {
+        fs::write(inbox.join("review.json"), refused).unwrap();
+        assert!(!adopt(inbox.parent().unwrap(), &dir) && fs::read_to_string(dir.join("review.json")).unwrap() == empty && !dir.join("assets").exists(), "{why} leaves the bundle as it was");
+    }
+    std::os::unix::fs::symlink(&root, inbox.join("assets/link")).unwrap();
+    fs::write(inbox.join("review.json"), whole).unwrap();
+    assert!(adopt(inbox.parent().unwrap(), &dir) && finished_guide(&dir) && dir.join("assets/flow.png").exists() && !dir.join("assets/link").exists(), "links in the artifact are not followed");
     let bundle = Bundle::load(&dir).unwrap();
-    assert_eq!((bundle.review.title.as_str(), bundle.review.sources[0].patch.as_str(), bundle.review.working.as_str()), ("Retry order submission", "mr.patch", ""));
+    assert_eq!((bundle.review.title.as_str(), bundle.review.sources[0].patch.as_str(), bundle.review.summary.as_str()), ("Retry order submission", "mr.patch", FROM_CI));
     let _ = fs::remove_dir_all(&root);
 }

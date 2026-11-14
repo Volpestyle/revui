@@ -64,7 +64,7 @@ Run nothing for it:
 - A flow, a sequence or a state change: write Mermaid to `assets/<name>.mmd` and run `revui diagram assets/<name>.mmd assets/<name>.png`. A diagram you reasoned out is `inferred`. Keep the numbered steps as `text` on the same entry.
 - A bug that is a path through states (a lifecycle, a protocol, a job queue): a statechart, when this session has a skill or tool that model-checks one. Render it to an image. What a model checker verified is `checked`.
 
-Attach the file as an evidence `path` on the item, with a caption that says what it shows. Images show inline in the viewer; other files open with `o`. One diagram per item unless asked for more. If you cannot draw it here, say what blocked you.
+Attach the file as an evidence `path` on the item, with a caption that says what it shows. When an entry already says what the diagram shows, set `path` on that entry and keep its text: a second entry with the same caption reads as a duplicate. Images show inline in the viewer; other files open with `o`. One diagram per item unless asked for more. If you cannot draw it here, say what blocked you.
 
 ## Limits
 

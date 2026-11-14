@@ -1119,6 +1119,24 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
         app.buttons = draw_help(frame);
     }
 
+    if let Some(at) = app.contents {
+        let listed: Vec<usize> = (0..app.rows.len()).filter(|&row| app.rows[row] != Row::Spacer).collect();
+        let shown = listed.len().min(frame.area().height.saturating_sub(8).max(1) as usize);
+        let top = listed.iter().position(|&row| row >= at).unwrap_or(0).saturating_sub(shown / 2).min(listed.len() - shown);
+        let room = frame.area().width.saturating_sub(4).min(84).saturating_sub(6).max(1) as usize;
+        let lines = listed[top..top + shown].iter().map(|&row| {
+            let mut left = room;
+            let spans = row_line(app, app.rows[row]).spans.into_iter().map(|span| {
+                let text: String = span.content.chars().take(left).collect();
+                left -= text.chars().count();
+                Span::styled(text, span.style)
+            });
+            let line = Line::from(spans.collect::<Vec<_>>());
+            if row == at { line.style(Style::new().add_modifier(Modifier::REVERSED)) } else { line }
+        });
+        app.buttons = popup(frame, " Contents ", lines.collect(), &[("enter", "Go", KeyCode::Enter), ("esc", "Close", KeyCode::Esc)]).1;
+    }
+
     if let Some(input) = &app.input {
         let wrapped = wrap(&input.text, width);
         let (mut row, mut left) = (0, input.cursor.min(input.text.chars().count()));
@@ -1252,7 +1270,7 @@ It never hides code. Anything the agent left out is shown as \"no part\".
 
 # One card at a time
 l goes to the next card and h back: the summary, then each part with the findings under it, then what was already said on the merge request and your own comments.
-Findings arrive while the agent is still reviewing, so you can start reading at once. The top line says what it is on. b shows the list of every card.
+Findings arrive while the agent is still reviewing, so you can start reading at once. The top line says what it is on. b lists every card: pick one to jump to it. B keeps the list beside the card.
 B blocker · F should fix · S suggestion · Q question or a decision the change made · G good call
 
 # A review, start to finish

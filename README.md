@@ -137,7 +137,8 @@ and `?` explains the screen you are on.
 | In a review | |
 | --- | --- |
 | `l` `h` | next card, previous card |
-| `b` | show or hide the list of every card |
+| `b` | list every card and jump to one |
+| `B` | keep the list of every card beside the card |
 | `j` `k`, `tab` | move, switch pane |
 | `a` `x` | agree or dismiss a finding, accept or push back on a decision |
 | `c` `C` | comment on what is under the cursor, or on the whole merge request |

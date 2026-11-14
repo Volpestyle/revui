@@ -264,6 +264,8 @@ struct App {
     outline: bool,
     /// The list of every card, over the card, with the row it is on: pick one and it closes.
     contents: Option<usize>,
+    /// Where each row of that list is drawn, for the mouse.
+    contents_rows: Vec<(Rect, usize)>,
     /// An agent started here is writing this guide. Holds the name of its tab, which outlives the screen; empty when it runs elsewhere.
     generating: Option<String>,
     picker: Picker,
@@ -349,6 +351,7 @@ impl App {
             job: None,
             outline: false,
             contents: None,
+            contents_rows: Vec::new(),
             generating: None,
             picker,
             images: HashMap::new(),
@@ -622,11 +625,7 @@ impl App {
             next += delta;
         }
         if next < 0 || next as usize >= self.rows.len() {
-            self.note = match (delta > 0, self.bundle.review.working.trim().is_empty()) {
-                (false, _) => "This is the first card.".into(),
-                (true, false) => "Nothing after this yet.".into(),
-                (true, true) => String::new(),
-            };
+            self.note = if delta > 0 && !self.bundle.review.working.trim().is_empty() { "Nothing after this yet.".into() } else { String::new() };
             return;
         }
         self.select(next as usize);
@@ -1721,6 +1720,13 @@ pub fn review(terminal: &mut DefaultTerminal, bundle: Bundle, images: Picker, ta
                                 (app.confirm, app.menu, app.palette, app.input, app.finish, app.help, app.contents) = (None, None, None, None, None, false, None);
                                 app.pending = Some(KeyCode::Char('q'));
                             }
+                            (MouseEventKind::Down(_), None) if app.contents.is_some() => {
+                                if let Some(&(_, row)) = app.contents_rows.iter().find(|(area, row)| area.contains(at) && App::steppable(app.rows.get(*row))) {
+                                    (app.contents, app.pending) = (Some(row), Some(KeyCode::Enter));
+                                }
+                            }
+                            (MouseEventKind::ScrollDown, _) if app.contents.is_some() => app.pending = Some(KeyCode::Char('j')),
+                            (MouseEventKind::ScrollUp, _) if app.contents.is_some() => app.pending = Some(KeyCode::Char('k')),
                             (MouseEventKind::Down(_), None) => (app.selection, app.modal_selection) = (None, Some((at, at))),
                             (MouseEventKind::Drag(_), _) => app.modal_selection = app.modal_selection.map(|(start, _)| (start, at)),
                             (MouseEventKind::Up(_), _) => match app.modal_selection {

@@ -471,7 +471,8 @@ fn a_review_is_read_one_card_at_a_time() {
     assert!(app.areas[0].width == 0 && app.handles.iter().all(|(_, handle)| *handle != Handle::Guide), "the list of every card is not on screen");
 
     app.key(KeyCode::Char('h'));
-    assert!(app.sel == 0 && app.note.contains("first card"));
+    assert!(app.sel == 0 && app.note.is_empty());
+    assert!(app.action_buttons.iter().any(|(_, code)| *code == KeyCode::Char('b')), "the card's place in the walk is a click target for the list of every card");
     app.key(KeyCode::Char('l'));
     assert!(matches!(app.rows[app.sel], Row::Group(0)) && app.card_title().contains("part 1 of"));
     app.key(KeyCode::Right);
@@ -503,6 +504,7 @@ fn a_review_is_read_one_card_at_a_time() {
     terminal.draw(|f| draw(&mut app, f)).unwrap();
     let screen = format!("{}", terminal.backend());
     assert!(app.contents == Some(from) && screen.contains(" Contents ") && screen.contains("Overview") && screen.contains("enter · Go"), "b lists every card over the card");
+    assert!(app.contents_rows.iter().any(|(area, row)| *row == from && area.width > 0), "each row is a click target");
     app.key(KeyCode::Char('k'));
     let picked = app.contents.unwrap();
     assert!(picked < from && app.sel == from, "moving in the list does not move the card under it");

@@ -132,6 +132,7 @@ impl App {
                 KeyCode::Char('j') | KeyCode::Down => self.contents = Some(step(1)),
                 KeyCode::Char('k') | KeyCode::Up => self.contents = Some(step(-1)),
                 KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                    self.note.clear();
                     self.select(at);
                     self.focus = if self.outline { 0 } else { 1 };
                 }

@@ -58,7 +58,7 @@ Where a run happens is the person's choice, per repo. `revui drive "$dir"` print
 
 A deployed environment only has merged code. It can show what happens today, before this change. What this change does has to come from its head: a local run, or a preview deploy of the branch.
 
-**Artifacts**: only for the few items that are hard to follow in text (a flow across several components, an outcome that depends on ordering or state). Use a cheap form, usually a diagram: `revui skill` prints how, under "Artifacts".
+**Diagrams**: only for the few items that are hard to follow in text (a flow across several components, an outcome that depends on ordering or state): `revui skill` prints how, under "Diagrams".
 
 ## 4. Finish
 

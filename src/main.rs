@@ -902,8 +902,8 @@ impl App {
             (Mode::Ask, false) => format!("About {looking_at}: "),
             (Mode::Verify, true) => format!("Verify {target} in {guide}. {WHERE}"),
             (Mode::Verify, false) => format!("Verify {target}. {WHERE}"),
-            (Mode::Artifact, true) => format!("Make an artifact for {target} in {guide}. If it needs a run: {WHERE}"),
-            (Mode::Artifact, false) => format!("Make an artifact for {target}. If it needs a run: {WHERE}"),
+            (Mode::Artifact, true) => format!("Draw a diagram that makes {target} easy to follow, in {guide}. Run nothing: verifying is a separate ask."),
+            (Mode::Artifact, false) => format!("Draw a diagram that makes {target} easy to follow. Run nothing: verifying is a separate ask."),
         };
         let (session, session_id) = self.session().map_or((String::new(), String::new()), |s| (s.handle, s.id));
         let first_hunk = place.and_then(|(file, _)| file.hunks.first()).map_or("", |hunk| hunk.header.as_str());

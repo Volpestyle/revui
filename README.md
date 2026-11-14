@@ -83,7 +83,7 @@ runs against a small demo project, sped up where the badge says so.
 
 <p align="center"><img src="docs/verify.gif" alt="The agent reproducing a finding locally and marking it confirmed" width="900"></p>
 
-**Ask for an artifact.** `i` has the agent make one for a finding: output of a run, a screenshot, a diagram or a recording. Here it is asked for a sequence diagram, which then shows beside the code.
+**Ask for a diagram.** `i` has the agent draw one that explains a finding, without running anything. It shows beside the code. What a run showed (output, a screenshot, a recording) comes from `v`, and a finding can carry both.
 
 <p align="center"><img src="docs/artifact.gif" alt="The agent drawing a sequence diagram for a finding" width="900"></p>
 
@@ -141,7 +141,7 @@ and `?` explains the screen you are on.
 | `j` `k`, `tab` | move, switch pane |
 | `a` `x` | agree or dismiss a finding, accept or push back on a decision |
 | `c` `C` | comment on what is under the cursor, or on the whole merge request |
-| `t` `v` `i` | ask the agent, have it verify a finding, have it make an artifact |
+| `t` `v` `i` | ask the agent, have it verify a finding, have it draw a diagram of one |
 | `o` `O` | open the file or the artifact, or every file in this part |
 | `space` | in the artifact pane, play or pause a recording (needs `ffmpeg`) |
 | `d` `s` | hide the diff, put it beside the detail pane or under it |

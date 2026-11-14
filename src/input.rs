@@ -402,7 +402,7 @@ pub(crate) const COMMANDS: [Command; 33] = [
     ("Page up in the focused pane", "U", KeyCode::Char('U')),
     ("Put the diff beside the detail pane, or under it", "s", KeyCode::Char('s')),
     ("Open the merge request in the browser", "m", KeyCode::Char('m')),
-    ("Make an artifact for this finding (diagram, screenshot, recording)", "i", KeyCode::Char('i')),
+    ("Draw a diagram that explains this finding", "i", KeyCode::Char('i')),
     ("Artifact: choose where the agent opens", "I", KeyCode::Char('I')),
     ("Have the agent review this merge request and write its guide", "g", KeyCode::Char('g')),
     ("Agree with this finding (it goes out when you publish)", "a", KeyCode::Char('a')),

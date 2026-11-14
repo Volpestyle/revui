@@ -473,7 +473,7 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
     }
     if item.evidence.is_empty() {
         section(&mut rows, "Evidence (none)".into());
-        paragraph(&mut rows, "None recorded · v verify · i artifact", width, "", dim, None);
+        paragraph(&mut rows, "None recorded · v verify · i diagram", width, "", dim, None);
         return rows;
     }
     section(&mut rows, format!("Evidence ({})", item.evidence.len()));
@@ -837,7 +837,7 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
         (2, _) => format!("j/k line · c comment · o open {target} · s layout · d hide"),
         (3, _) if recording => "space play or pause · o open · z zoom".to_string(),
         (3, _) => "o open · z zoom".to_string(),
-        _ if app.item().is_some() => format!("{verdict} · v verify · i artifact"),
+        _ if app.item().is_some() => format!("{verdict} · v verify · i diagram"),
         _ => verdict.to_string(),
     };
     let shown = if app.hide_diff { " · d show diff" } else { "" };
@@ -964,7 +964,7 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
     app.detail_scroll = app.detail_scroll.min(text.len().saturating_sub(text_area.height.saturating_sub(2) as usize) as u16);
     let picked = app.checked.len();
     let count = format!("{picked} picked");
-    let keys: Vec<&str> = if picked == 0 { vec![] } else { vec![&count, "v verify", "i artifact"] };
+    let keys: Vec<&str> = if picked == 0 { vec![] } else { vec![&count, "v verify", "i diagram"] };
     let style = match picked {
         0 => Style::new().fg(Color::DarkGray),
         _ => Style::new().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
@@ -1187,9 +1187,9 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
             (Mode::Verify, _) if !app.checked.is_empty() => format!("Verify the {} picked claims by running them", app.checked.len()),
             (Mode::Verify, Some(item)) => format!("Verify {} by running it", item.id),
             (Mode::Verify, None) => "Verify this section's unproven findings by running them".into(),
-            (Mode::Artifact, _) if !app.checked.is_empty() => format!("Make an artifact for the {} picked claims", app.checked.len()),
-            (Mode::Artifact, Some(item)) => format!("Make an artifact that shows {}", item.id),
-            (Mode::Artifact, None) => "Make artifacts for this section's findings".into(),
+            (Mode::Artifact, _) if !app.checked.is_empty() => format!("Draw the {} picked claims", app.checked.len()),
+            (Mode::Artifact, Some(item)) => format!("Draw a diagram that explains {}", item.id),
+            (Mode::Artifact, None) => "Draw diagrams for this section's findings".into(),
             (Mode::Ask, Some(item)) => format!("Ask about {}", item.id),
             (Mode::Ask, None) => "Ask about this part of the change".into(),
             (Mode::Guide, _) => "Review this merge request and write its guide".into(),
@@ -1201,7 +1201,7 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
             lines.push(Line::styled(format!(" {}  {label} ", i + 1), style));
         }
         let buttons = [("enter", "Go", KeyCode::Enter), ("esc", "Cancel", KeyCode::Esc)];
-        let (inner, mut areas) = popup(frame, [" Ask ", " Verify with ", " Make an artifact with "][mode as usize], lines, &buttons);
+        let (inner, mut areas) = popup(frame, [" Ask ", " Verify with ", " Draw a diagram with "][mode as usize], lines, &buttons);
         for i in 0..options.len().min(9) {
             areas.push((Rect::new(inner.x, inner.y + 2 + i as u16, inner.width, 1), KeyCode::Char((b'1' + i as u8) as char)));
         }

@@ -93,7 +93,7 @@ fn demo_bundle_surfaces_hunks_the_guide_left_out() {
     app.key(KeyCode::Char('s'));
     terminal.draw(|f| draw(&mut app, f)).unwrap();
     assert!(!screen.contains("What it says") && screen.contains("· Evidence (2)"));
-    assert!(screen.contains("observed") && screen.contains("observed ▣  ✓") && !screen.contains("[ ]") && screen.contains("1 picked · v verify · i artifact") && fit(&["space/enter pick", "ctrl-o details", "j/k evidence"], 40) == " space/enter pick · ctrl-o details ");
+    assert!(screen.contains("observed") && screen.contains("observed ▣  ✓") && !screen.contains("[ ]") && screen.contains("1 picked · v verify · i diagram") && fit(&["space/enter pick", "ctrl-o details", "j/k evidence"], 40) == " space/enter pick · ctrl-o details ");
     let env: Vec<_> = app.command("true", Mode::Verify, false).get_envs().map(|(_, v)| v.unwrap().to_string_lossy().into_owned()).collect();
     assert!(env.iter().any(|e| e.starts_with("Verify these claims: B1") && e.contains("Orders list after one checkout")));
     let row = app.detail_area.y + 1 + app.detail_rows.iter().position(|n| *n == Some(0)).unwrap() as u16;

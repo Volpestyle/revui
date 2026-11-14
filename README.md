@@ -103,6 +103,13 @@ runs against a small demo project, sped up where the badge says so.
 The agent and your editor open inside revui, so you never leave the review.
 `ctrl-q` switches between them.
 
+## Where the change sits
+
+The summary can open with a map: the components the change touches and their
+neighbours, with what it adds, alters and removes marked. It is cut from a system map
+of the repo that the agent draws once and keeps for every later review
+(`revui map <dir>` prints it), so each guide only draws what moved.
+
 ## When the merge request moves on
 
 A new push does not start you over. The agent reviews what changed since the head

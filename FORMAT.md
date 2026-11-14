@@ -18,6 +18,7 @@ generator then fills in `review.json` and leaves `title` and `sources` as they a
       "title": "Retry order submission",
       "summary": "What the change does and how it was reviewed.",
       "working": "Reviewing part 2 of 4: Retry the submit call",
+      "map": { "provenance": "inferred", "caption": "The API now retries, through a new queue", "path": "assets/map.png", "text": "1. ..." },
       "sources": [ ...written by revui fetch, keep as is... ],
       "sections": [
         {
@@ -60,6 +61,12 @@ parts of a longer finding, each on its own line.
 `working` is there only while the guide is being written: one line saying what is
 being reviewed right now. The viewer shows it next to a spinner and tells the reader
 more findings may come. Remove it when the guide is whole.
+
+`map` is one evidence entry (see "Evidence") shown with the summary: a diagram of the
+components the change touches and their neighbours, with what the change adds, alters
+and removes marked. It is where the reader gets their bearings before the parts.
+`revui map <dir>` prints the system map kept for the repo, which it is cut from. Leave
+it out for a change that stays inside one component.
 
 Required: `title`, `sources`, `sections` (each with `title`, `why`, `hunks`), and
 for each item `id`, `kind`, `title`, `body`. Everything else can be left out.

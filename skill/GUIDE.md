@@ -28,6 +28,29 @@ Write the outline to `review.json` in one go, as soon as you understand the shap
 - **Parts** (`sections`): group hunks that belong together, the core of the change first, supporting code next, low-signal churn (renames, generated files, formatting) last. Each part gets one paragraph on why it exists. Place every hunk: split a file across parts by hunk when its hunks serve different purposes. This order is the order you review in and the order the person reads in, so do not change it later.
 - **`working`**: `Reviewing part 1 of N: <title>`.
 
+### The map
+
+Right after the outline is in the file, draw where this change sits, so the person sees the system before the findings. Set `working` to `Drawing the map` while you do. Skip it, and say nothing about it, for a change that stays inside one component and moves no call between components: a copy change, a rename, a fix inside one function.
+
+1. `revui map "$dir"` prints where this repo's system map is kept and what it holds. It is Mermaid: the components (apps, services, stores, queues, the outside systems they talk to) and who calls whom, as the target branch has it. Ten to twenty nodes, and nothing as small as a file or a function.
+2. None yet: draw it from the code and save it at that path. Every later review of this repo starts from it, so take the care once. One there already: check only the part this change touches against the code, and correct what is wrong.
+3. Never put this change into the system map. It describes the target branch, and this change may not merge.
+4. Copy the components this change touches, and their direct neighbours, into `assets/map.mmd`, and mark what the change does to them:
+
+       flowchart LR
+         web[Customer web] --> api[Orders API]
+         api --> db[(Orders table)]
+         api -. new .-> queue[[Retry queue]]
+         classDef changed stroke:#e8a33d,stroke-width:3px
+         classDef added stroke:#3fb950,stroke-width:3px
+         classDef removed stroke:#f85149,stroke-dasharray:4
+         class api changed
+         class queue added
+
+5. `revui diagram assets/map.mmd assets/map.png`, then set `map` in `review.json`: `provenance` `inferred`, `path` `assets/map.png`, a `caption` of one sentence saying what moves, and as `text` what changes at each marked place, numbered, in the order the parts are read.
+
+If the diagram cannot be rendered here, leave `map` out and go on: the review does not wait for it.
+
 ## 3. Review part by part, one finding at a time
 
 Take the parts in order. For each, read its changed files whole, not only their hunks, and follow the callers of what changed. Look for problems this change introduces: does it do what the ticket asks, security and data integrity, runtime behaviour and edge cases, error handling, then consistency with the code around it and needless complexity.

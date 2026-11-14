@@ -571,3 +571,28 @@ fn marks_follow_a_review_to_the_next_head() {
     assert!(!Bundle::load(&new).unwrap().load_state().verdicts.contains_key("F3"), "it happens once");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn the_summary_opens_with_where_the_change_sits() {
+    let root = std::env::temp_dir().join(format!("revui-map-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("assets")).unwrap();
+    std::fs::write(root.join("mr.patch"), "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-x\n+y\n").unwrap();
+    let guide = r#"{"title": "t", "summary": "It retries.", "map": {"provenance": "inferred", "caption": "The API now goes through a queue", "path": "assets/map.png", "text": "1. api: retries"},
+        "sources": [{"id": "mr", "head_sha": "a", "patch": "mr.patch"}], "sections": [{"title": "s", "why": "w", "hunks": [{"file": "a.ts"}]}], "items": []}"#;
+    std::fs::write(root.join("review.json"), guide).unwrap();
+    let (ok, report) = Bundle::load(&root).unwrap().check();
+    assert!(!ok && report.contains("missing file for the map: assets/map.png"));
+    std::fs::write(root.join("assets/map.png"), "").unwrap();
+    assert!(Bundle::load(&root).unwrap().check().0);
+
+    let mut app = App::new(Bundle::load(&root).unwrap(), Picker::halfblocks());
+    app.panes = Panes::default();
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal.draw(|f| draw(&mut app, f)).unwrap();
+    let screen = format!("{}", terminal.backend());
+    assert!(app.evidence_path() == Some(root.join("assets/map.png")) && screen.contains("Where it sits") && screen.contains("The API now goes through a queue") && screen.contains("where the change sits"), "{screen}");
+    app.card(1);
+    assert!(app.evidence_path().is_none(), "the map belongs to the summary, not to the parts");
+    let _ = std::fs::remove_dir_all(&root);
+}

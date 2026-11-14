@@ -11,6 +11,8 @@ pub struct Review {
     /// What the generator is reviewing right now. Set while the guide is still being written, gone when it is whole.
     #[serde(default)]
     pub working: String,
+    /// Where the change sits in the system and what it moves there: a diagram, shown with the summary.
+    pub map: Option<Evidence>,
     pub sources: Vec<Source>,
     pub sections: Vec<Section>,
     #[serde(default)]
@@ -275,6 +277,9 @@ impl Bundle {
         }
         for &(fi, hi) in self.groups[sections..].iter().flatten() {
             problems.push(format!("no section: {} hunk {hi}", self.files[fi].path));
+        }
+        if let Some(path) = self.review.map.as_ref().and_then(|map| map.path.as_ref()).filter(|path| !self.dir.join(path).exists()) {
+            problems.push(format!("missing file for the map: {path}"));
         }
         for item in &self.review.items {
             for path in item.evidence.iter().filter_map(|e| e.path.as_ref()) {

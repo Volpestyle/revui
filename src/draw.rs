@@ -322,6 +322,14 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
         Some(Row::Overview) => {
             let review = &bundle.review;
             paragraph(&mut rows, &review.summary, width, "", plain, None);
+            if let Some(map) = &review.map {
+                section(&mut rows, "Where it sits".into());
+                rows.push((Line::from(vec![Span::raw("  "), provenance(map.provenance)]), None));
+                paragraph(&mut rows, &map.caption, width, "  ", plain.add_modifier(Modifier::BOLD), None);
+                if let Some(text) = &map.text {
+                    paragraph(&mut rows, text, width, "  ", plain, None);
+                }
+            }
             section(&mut rows, "Read in this order".into());
             let how = "The guide splits the diff into parts, the core of the change first. Each part is a set of hunks that belong together, with why they exist. A finding sits under the part whose code it is about, so a part with none had nothing to raise.";
             paragraph(&mut rows, how, width, "  ", dim, None);
@@ -565,7 +573,10 @@ fn draw_image(app: &mut App, frame: &mut Frame, area: Rect, path: PathBuf) {
             clock_shown = format!(" · {} / {}", clock(video.position()), clock(length));
         }
     }
-    let title = format!("{kind} · evidence {}{clock_shown}", shown.map_or(0, |n| n + 1));
+    let title = match app.rows.get(app.sel) {
+        Some(Row::Overview) => format!("{kind} · where the change sits"),
+        _ => format!("{kind} · evidence {}{clock_shown}", shown.map_or(0, |n| n + 1)),
+    };
     app.picture_area = area;
     let picker = &app.picker;
     let layered = app.layered();

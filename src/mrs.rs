@@ -97,6 +97,16 @@ pub fn drive_report(bundle: Option<&Path>) -> String {
     out
 }
 
+/// Where the system map of a bundle's repo is kept, and what it holds. One per repo, shared by every review of it.
+pub fn map_report(bundle: &Path) -> Result<String, String> {
+    let repo = Bundle::load(bundle)?.review.sources.first().map(|source| source.repo.clone()).filter(|repo| !repo.is_empty());
+    let repo = repo.ok_or("this bundle names no repository")?;
+    let kept = data_dir().join("notes").join(format!("{}.map.mmd", repo.replace('/', "__")));
+    let text = fs::read_to_string(&kept).unwrap_or_default();
+    let holds = if text.trim().is_empty() { "none yet: draw it and save it there (`revui skill guide`, \"The map\")" } else { text.trim() };
+    Ok(format!("System map of {repo} ({}):\n{holds}\n", kept.display()))
+}
+
 fn config() -> Config {
     fs::read_to_string(config_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
@@ -625,7 +635,7 @@ pub fn adopt(inbox: &Path, dir: &Path) -> bool {
     let head = |review: &serde_json::Value| review["sources"][0]["head_sha"].as_str().map(String::from);
     let unfinished = guide["sections"].as_array().is_none_or(Vec::is_empty) || !guide["working"].as_str().unwrap_or("").trim().is_empty();
     let evidence = guide["items"].as_array().into_iter().flatten().flat_map(|item| item["evidence"].as_array().into_iter().flatten());
-    let outside = evidence.filter_map(|one| one["path"].as_str()).any(|path| Path::new(path).components().any(|part| !matches!(part, std::path::Component::Normal(_))));
+    let outside = evidence.chain(std::iter::once(&guide["map"])).filter_map(|one| one["path"].as_str()).any(|path| Path::new(path).components().any(|part| !matches!(part, std::path::Component::Normal(_))));
     if head(&guide).is_none() || head(&guide) != head(&own) || unfinished || outside {
         return false;
     }

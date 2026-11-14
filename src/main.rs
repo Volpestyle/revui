@@ -946,6 +946,9 @@ impl App {
     }
 
     fn evidence_path(&self) -> Option<PathBuf> {
+        if let Some(Row::Overview) = self.rows.get(self.sel) {
+            return Some(self.bundle.dir.join(self.bundle.review.map.as_ref()?.path.as_ref()?));
+        }
         let evidence = &self.item()?.evidence;
         let selected = evidence.get(self.evidence).and_then(|e| e.path.as_ref());
         let path = selected.or_else(|| evidence.iter().find_map(|e| e.path.as_ref()))?;
@@ -1516,6 +1519,10 @@ fn picker() -> Picker {
         Some(font) => Picker::from_fontsize(font.into()),
         None => {
             let asked = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+            // An unanswered query (tmux without allow-passthrough) leaves its reader thread blocked on stdin, where it
+            // eats the next key or cursor report. A plain status report gets answered and lets that thread finish.
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), b"\x1b[5n").and_then(|()| std::io::Write::flush(&mut std::io::stdout()));
+            std::thread::sleep(std::time::Duration::from_millis(40));
             while event::poll(std::time::Duration::from_millis(60)).unwrap_or(false) {
                 let _ = event::read();
             }
@@ -1997,6 +2004,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some("skill"), Some(which)) if which == "guide" => return Ok(print!("{GUIDE}")),
         (Some("skill"), _) => return Ok(print!("{SKILL}")),
         (Some("drive"), dir) => return Ok(print!("{}", mrs::drive_report(dir.map(Path::new)))),
+        (Some("map"), Some(dir)) => return Ok(print!("{}", mrs::map_report(Path::new(dir))?)),
         (Some("doctor"), _) => {
             use std::io::IsTerminal;
             let images = match std::io::stdin().is_terminal() {
@@ -2026,6 +2034,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui skill drive       print the guide for running and driving the product in the background\n\
                  revui skill install     install all three as Claude Code skills\n\
                  revui drive [dir]       what to drive a browser or app with here, and the notes for that bundle's repo\n\
+                 revui map <dir>         the system map kept for that bundle's repo, and where it is\n\
                  revui doctor            check the setup, exit 1 when something needs fixing\n\
                  revui setup             have a coding agent set revui up for you\n\
                  revui setup --guide     print the setup guide that agent follows\n\

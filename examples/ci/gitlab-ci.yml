@@ -1,0 +1,32 @@
+# Writes a revui guide for every merge request and keeps it as the artifact of a job named revui-guide.
+# Anyone who then opens the merge request in revui gets that guide instead of starting a review.
+#
+# Add this job to .gitlab-ci.yml (the job name is what revui looks for) and set two CI/CD variables:
+#   ANTHROPIC_API_KEY   for the agent
+#   REVUI_GITLAB_TOKEN  a project access token with read_api, so glab can read the merge request
+# The job runs a coding agent with a shell over the merge request's content. Merge request pipelines
+# from forks run in the fork by default: keep it that way, since a fork's changes could steer the agent.
+revui-guide:
+  image: node:22-bookworm
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  allow_failure: true
+  variables:
+    GLAB_VERSION: "1.120.0"
+    REVUI_HOME: $CI_PROJECT_DIR/.revui
+    GITLAB_TOKEN: $REVUI_GITLAB_TOKEN
+    GITLAB_HOST: $CI_SERVER_HOST
+  script:
+    - curl -fsSL -o glab.deb "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.deb"
+    - apt-get update -qq && apt-get install -y -qq ./glab.deb unzip
+    - npm install -g @anthropic-ai/claude-code
+    - curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | REVUI_INSTALL_DIR=/usr/local/bin sh
+    - mkdir -p "$REVUI_HOME"
+    - echo '{"prepare":"claude -p \"$REVUI_PROMPT\" --allowedTools Bash,Read,Write,Edit,Glob,Grep"}' > "$REVUI_HOME/config.json"
+    - url="$CI_MERGE_REQUEST_PROJECT_URL/-/merge_requests/$CI_MERGE_REQUEST_IID"
+    - revui prepare "$url"
+    - cp -R "$(revui fetch "$url")" revui-guide
+  artifacts:
+    paths:
+      - revui-guide/review.json
+      - revui-guide/assets

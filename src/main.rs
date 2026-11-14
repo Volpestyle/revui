@@ -896,7 +896,7 @@ impl App {
             // A guide for an earlier head is updated into the bundle of the current one, which `revui fetch` already made.
             (Mode::Guide, _) => {
                 let into = self.bundle.successor.as_ref().unwrap_or(&self.bundle.dir).display().to_string();
-                format!("Review {url} and write its revui guide into {into}. Run `revui skill guide` first and follow it.")
+                mrs::guide_prompt(url, &into)
             }
             (Mode::Ask, true) => format!("I'm reviewing {url} with {guide}. About {looking_at}: "),
             (Mode::Ask, false) => format!("About {looking_at}: "),
@@ -1932,6 +1932,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         (Some("format"), _) => return Ok(print!("{}", include_str!("../FORMAT.md"))),
         (Some("fetch"), Some(url)) => return Ok(println!("{}", mrs::fetch(url)?.display())),
+        (Some("queue"), _) => {
+            let (waiting, problems) = mrs::queue();
+            for (url, dir, guide) in waiting {
+                println!("{}\t{url}\t{}", if guide { "guide" } else { "no guide" }, dir.display());
+            }
+            problems.iter().for_each(|problem| eprintln!("could not ask {problem}"));
+            std::process::exit(if problems.is_empty() { 0 } else { 1 });
+        }
+        (Some("prepare"), link) => {
+            let named = link.map(|link| mrs::fetch(link).map(|dir| (vec![(link.clone(), dir, false)], Vec::new()))).transpose()?;
+            let (waiting, problems) = named.unwrap_or_else(mrs::queue);
+            problems.iter().for_each(|problem| eprintln!("could not ask {problem}"));
+            let mut failed = !problems.is_empty();
+            for (url, dir, _) in waiting.into_iter().filter(|(_, dir, _)| !mrs::finished_guide(dir)) {
+                match mrs::prepare(&url, &dir) {
+                    Ok(()) => println!("guide written: {url}\t{}", dir.display()),
+                    Err(problem) => {
+                        failed = true;
+                        eprintln!("{url}: {problem}");
+                    }
+                }
+            }
+            std::process::exit(if failed { 1 } else { 0 });
+        }
         (Some("hunks"), Some(dir)) => return Ok(print!("{}", Bundle::load(Path::new(dir))?.hunks())),
         (Some("check"), Some(dir)) => {
             let (ok, report) = Bundle::load(Path::new(dir))?.check();
@@ -1983,6 +2007,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui <dir>             open a bundle\n\
                  revui <dir> --export    print the reviewer's verdicts\n\
                  revui fetch <mr url>    create the bundle for a merge request, print its directory\n\
+                 revui queue             list the merge requests waiting for your review, and make their bundles\n\
+                 revui prepare [mr url]  write the guides those are missing, or that one's, with no one watching\n\
                  revui hunks <dir>       list the diff's files and hunk indexes\n\
                  revui check <dir>       validate a bundle, exit 1 on problems\n\
                  revui shot <url|file> <out.png> [WxH]   screenshot a page in headless Chrome\n\

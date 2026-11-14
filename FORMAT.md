@@ -143,6 +143,10 @@ bundle and, if an earlier head had a guide, writes its directory into a file nam
   fixed one stays with `status` `resolved` and one line saying what fixed it.
 - New findings get new ids.
 
+Keeping ids is what lets the reviewer's marks follow: a verdict carries over to an
+item with the same `id`, `title` and `body` that is not `resolved`. Reword an item
+only when what it says changed, because a reworded item is put to the reviewer again.
+
 ## Check
 
 `revui check <dir>` prints a line that starts with `ok` and exits 0 for a clean bundle. It prints `not ok`

@@ -723,13 +723,13 @@ fn header(app: &App, width: u16) -> Vec<Line<'static>> {
     let dim = Style::new().fg(Color::DarkGray);
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let join = |parts: &[&str]| parts.iter().filter(|p| !p.is_empty()).copied().collect::<Vec<_>>().join(" · ");
-    let count = |label: &str, done: usize, total: usize| {
+    let count = |done: usize, total: usize| {
         let color = match (total, done >= total) {
             (0, _) => Color::DarkGray,
             (_, true) => Color::Green,
             (_, false) => Color::Yellow,
         };
-        Span::styled(format!("{label} {done}/{total}"), Style::new().fg(color))
+        Span::styled(format!("{done}/{total}"), Style::new().fg(color))
     };
     let mut open = String::new();
     if !app.tabs.terms.is_empty() {
@@ -769,7 +769,7 @@ fn header(app: &App, width: u16) -> Vec<Line<'static>> {
                 };
                 line.extend([spinner(), Span::styled(format!(" {working} · {found} · "), Style::new().fg(accent()))]);
             }
-            line.extend([count("verdicts", app.state.verdicts.len(), review.items.len()), Span::styled(format!(" · {rest}"), dim)]);
+            line.extend([count(app.state.verdicts.len(), review.items.len()), Span::styled(format!(" · {rest}"), dim)]);
             Line::from(line)
         }
         (None, false) => Line::styled(format!(" {}", app.note), Style::new().fg(Color::Yellow)),
@@ -981,7 +981,9 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
         _ => Style::new().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
     };
     let hint = Line::styled(fit(&keys, text_area.width), style);
-    let block = pane(&app.card_title(), app.focus == 1, app.outline, false).title_bottom(hint);
+    let title = format!("{} ▾", app.card_title());
+    app.action_buttons.push((Rect::new(text_area.x, text_area.y, title.chars().count() as u16 + 2, 1).intersection(text_area), KeyCode::Char('b')));
+    let block = pane(&title, app.focus == 1, app.outline, false).title_bottom(hint);
     let starts = |line: &Line, with: &str| line.spans.first().is_some_and(|span| span.content.starts_with(with));
     app.verdict_row = text.iter().position(|line| starts(line, " a · ")).map(|row| {
         let width = |n: usize| text[row].spans.get(n).map_or(0, |span| span.content.chars().count() as u16);
@@ -1145,7 +1147,9 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
             let line = Line::from(spans.collect::<Vec<_>>());
             if row == at { line.style(Style::new().add_modifier(Modifier::REVERSED)) } else { line }
         });
-        app.buttons = popup(frame, " Contents ", lines.collect(), &[("enter", "Go", KeyCode::Enter), ("esc", "Close", KeyCode::Esc)]).1;
+        let (inner, buttons) = popup(frame, " Contents ", lines.collect(), &[("enter", "Go", KeyCode::Enter), ("esc", "Close", KeyCode::Esc)]);
+        app.buttons = buttons;
+        app.contents_rows = listed[top..top + shown].iter().enumerate().map(|(i, &row)| (Rect::new(inner.x, inner.y + i as u16, inner.width, 1), row)).collect();
     }
 
     if let Some(input) = &app.input {

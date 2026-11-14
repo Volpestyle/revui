@@ -120,6 +120,25 @@ impl App {
 
     pub(crate) fn key(&mut self, code: KeyCode) -> bool {
         self.selection = None;
+        if let Some(at) = self.contents.take() {
+            let step = |delta: i32| {
+                let mut next = at as i32 + delta;
+                while next >= 0 && (next as usize) < self.rows.len() && !App::steppable(self.rows.get(next as usize)) {
+                    next += delta;
+                }
+                if next < 0 || next as usize >= self.rows.len() { at } else { next as usize }
+            };
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => self.contents = Some(step(1)),
+                KeyCode::Char('k') | KeyCode::Up => self.contents = Some(step(-1)),
+                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                    self.select(at);
+                    self.focus = if self.outline { 0 } else { 1 };
+                }
+                _ => {}
+            }
+            return true;
+        }
         if !matches!(code, KeyCode::Char('c' | 'n')) {
             self.picked_lines = None;
         }
@@ -164,7 +183,8 @@ impl App {
             }
             KeyCode::Char('l') | KeyCode::Right => self.card(1),
             KeyCode::Char('h') | KeyCode::Left => self.card(-1),
-            KeyCode::Char('b') => {
+            KeyCode::Char('b') => self.contents = Some(self.sel),
+            KeyCode::Char('B') => {
                 self.outline = !self.outline;
                 self.focus = if self.outline { 0 } else { 1 };
             }
@@ -384,10 +404,11 @@ pub fn matching(all: &[Command], filter: &str) -> Vec<Command> {
     all.iter().copied().filter(|(label, _, _)| wanted(label)).collect()
 }
 
-pub(crate) const COMMANDS: [Command; 33] = [
+pub(crate) const COMMANDS: [Command; 34] = [
     ("Next card: the summary, each part, each finding, then the conversation", "l or →", KeyCode::Char('l')),
     ("Previous card", "h or ←", KeyCode::Char('h')),
-    ("Contents: show or hide the list of every card", "b", KeyCode::Char('b')),
+    ("Contents: list every card and jump to one", "b", KeyCode::Char('b')),
+    ("Keep the list of every card beside the card, or put it away", "B", KeyCode::Char('B')),
     ("Go one step in: a pane, then the artifact or file; a thread opens on the web", "enter", KeyCode::Enter),
     ("Ask the agent about this", "t", KeyCode::Char('t')),
     ("Ask: choose where the agent opens", "T", KeyCode::Char('T')),

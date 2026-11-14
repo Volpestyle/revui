@@ -262,6 +262,8 @@ struct App {
     job: Option<std::process::Child>,
     /// The list of every card, beside the card. Off, the screen is one card at a time.
     outline: bool,
+    /// The list of every card, over the card, with the row it is on: pick one and it closes.
+    contents: Option<usize>,
     /// An agent started here is writing this guide. Holds the name of its tab, which outlives the screen; empty when it runs elsewhere.
     generating: Option<String>,
     picker: Picker,
@@ -346,6 +348,7 @@ impl App {
             confirm: None,
             job: None,
             outline: false,
+            contents: None,
             generating: None,
             picker,
             images: HashMap::new(),
@@ -1007,7 +1010,7 @@ impl App {
 
     /// A popup is open over the review. Terminal images draw above text, so they are left out meanwhile.
     fn layered(&self) -> bool {
-        self.confirm.is_some() || self.menu.is_some() || self.palette.is_some() || self.input.is_some() || self.finish.is_some() || self.help
+        self.confirm.is_some() || self.menu.is_some() || self.palette.is_some() || self.input.is_some() || self.finish.is_some() || self.help || self.contents.is_some()
     }
 
     fn recording(&mut self) -> Option<&mut video::Video> {
@@ -1599,7 +1602,7 @@ pub fn review(terminal: &mut DefaultTerminal, bundle: Bundle, images: Picker, ta
                         app.note = "Loaded the guide for the current head.".into();
                     }
                     // A guide written in stages lands many times. Wait while something is being typed or chosen, and keep the reader's place.
-                    let composing = app.input.is_some() || app.finish.is_some() || app.menu.is_some() || app.palette.is_some() || app.confirm.is_some();
+                    let composing = app.input.is_some() || app.finish.is_some() || app.menu.is_some() || app.palette.is_some() || app.confirm.is_some() || app.contents.is_some();
                     if modified(&guide) != stamp && !composing {
                         stamp = modified(&guide);
                         if let Ok(mut bundle) = Bundle::load(&app.bundle.dir) {
@@ -1694,7 +1697,7 @@ pub fn review(terminal: &mut DefaultTerminal, bundle: Bundle, images: Picker, ta
                         continue;
                     }
                 }
-                let layered = app.confirm.is_some() || app.menu.is_some() || app.palette.is_some() || app.input.is_some() || app.finish.is_some() || app.help;
+                let layered = app.layered();
                 match event {
                     Event::Mouse(m) if layered => {
                         let at = Position::new(m.column, m.row);
@@ -1708,7 +1711,7 @@ pub fn review(terminal: &mut DefaultTerminal, bundle: Bundle, images: Picker, ta
                                 app.pending = Some(code);
                             }
                             (MouseEventKind::Down(_), None) if app.back_area.contains(at) => {
-                                (app.confirm, app.menu, app.palette, app.input, app.finish, app.help) = (None, None, None, None, None, false);
+                                (app.confirm, app.menu, app.palette, app.input, app.finish, app.help, app.contents) = (None, None, None, None, None, false, None);
                                 app.pending = Some(KeyCode::Char('q'));
                             }
                             (MouseEventKind::Down(_), None) => (app.selection, app.modal_selection) = (None, Some((at, at))),
@@ -1742,6 +1745,10 @@ pub fn review(terminal: &mut DefaultTerminal, bundle: Bundle, images: Picker, ta
         app.modal_selection = None;
         if app.help {
             app.help = false;
+            continue;
+        }
+        if app.contents.is_some() {
+            app.key(code);
             continue;
         }
         if let Some(mut input) = app.input.take() {

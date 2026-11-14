@@ -498,10 +498,24 @@ fn a_review_is_read_one_card_at_a_time() {
     terminal.draw(|f| draw(&mut app, f)).unwrap();
     assert!(format!("{}", terminal.backend()).contains("Reviewing part 2 of 3: Retry · "), "the header says what the agent is on");
 
+    let from = app.sel;
     app.key(KeyCode::Char('b'));
     terminal.draw(|f| draw(&mut app, f)).unwrap();
-    assert!(app.outline && app.focus == 0 && app.areas[0].width > 0, "b brings the list of every card back");
+    let screen = format!("{}", terminal.backend());
+    assert!(app.contents == Some(from) && screen.contains(" Contents ") && screen.contains("Overview") && screen.contains("enter · Go"), "b lists every card over the card");
+    app.key(KeyCode::Char('k'));
+    let picked = app.contents.unwrap();
+    assert!(picked < from && app.sel == from, "moving in the list does not move the card under it");
+    app.key(KeyCode::Enter);
+    assert!(app.contents.is_none() && app.sel == picked && app.focus == 1 && !app.outline, "enter goes to the card and the list closes");
     app.key(KeyCode::Char('b'));
+    app.key(KeyCode::Esc);
+    assert!(app.contents.is_none() && app.sel == picked, "esc closes it and stays put");
+
+    app.key(KeyCode::Char('B'));
+    terminal.draw(|f| draw(&mut app, f)).unwrap();
+    assert!(app.outline && app.focus == 0 && app.areas[0].width > 0, "B keeps the list of every card beside the card");
+    app.key(KeyCode::Char('B'));
     assert!(!app.outline && app.focus == 1);
 
     let (ok, report) = app.bundle.check();

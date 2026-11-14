@@ -1,0 +1,37 @@
+# Writes a revui guide for every pull request and keeps it as an artifact named revui-guide.
+# Anyone who then opens the pull request in revui gets that guide instead of starting a review.
+#
+# Copy to .github/workflows/revui-guide.yml and add the secret ANTHROPIC_API_KEY.
+# The job runs a coding agent with a shell over the pull request's content. It is limited to
+# branches of this repository: do not widen it to forks, whose changes could steer the agent.
+name: revui-guide
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guide:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    env:
+      REVUI_HOME: ${{ runner.temp }}/revui
+      GH_TOKEN: ${{ github.token }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | REVUI_INSTALL_DIR=/usr/local/bin sudo -E sh
+      - run: |
+          mkdir -p "$REVUI_HOME"
+          echo '{"prepare": "claude -p \"$REVUI_PROMPT\" --allowedTools Bash,Read,Write,Edit,Glob,Grep"}' > "$REVUI_HOME/config.json"
+          revui prepare "${{ github.event.pull_request.html_url }}"
+          cp -R "$(revui fetch "${{ github.event.pull_request.html_url }}")" revui-guide
+      - uses: actions/upload-artifact@v4
+        with:
+          name: revui-guide
+          path: |
+            revui-guide/review.json
+            revui-guide/assets

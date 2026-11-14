@@ -15,6 +15,7 @@ use std::{fs, io};
 struct Config {
     generate: Option<String>,
     generate_modal: Option<bool>,
+    prepare: Option<String>,
     claude: Option<String>,
     drive: Option<String>,
     accent: Option<String>,
@@ -233,6 +234,49 @@ fn from_github(pr: &serde_json::Value, repo: &str) -> Option<Mr> {
         author: User { username: author["login"].as_str().or(author["name"].as_str()).unwrap_or("").to_string() },
         references: References { full: format!("{repo}#{number}") },
     })
+}
+
+pub fn guide_prompt(url: &str, dir: &str) -> String {
+    format!("Review {url} and write its revui guide into {dir}. Run `revui skill guide` first and follow it.")
+}
+
+/// Open merge requests and pull requests that ask for your review and are not drafts, as links.
+pub fn requested() -> Vec<String> {
+    let list = |json: Result<String, String>, key: &str| -> Vec<String> {
+        let found: Vec<serde_json::Value> = json.ok().and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
+        found.iter().filter(|one| one["draft"] != true && one["isDraft"] != true).filter_map(|one| one[key].as_str().map(String::from)).collect()
+    };
+    let mut urls = list(gh(&["search", "prs", "--review-requested=@me", "--state=open", "--json", "url,isDraft", "--limit", "50"]), "url");
+    let me = glab(&["api", "user"]).ok().and_then(|user| serde_json::from_str::<serde_json::Value>(&user).ok());
+    if let Some(me) = me.as_ref().and_then(|me| me["username"].as_str()) {
+        urls.extend(list(glab(&["api", &format!("merge_requests?scope=all&state=opened&reviewer_username={me}&per_page=50")]), "web_url"));
+    }
+    urls
+}
+
+/// A bundle for each of them, marked as waiting for you: the link, its directory, and whether its current head has a guide.
+pub fn queue() -> Vec<(String, PathBuf, bool)> {
+    let bundle = |url: String| {
+        let dir = fetch(&url).ok()?;
+        let _ = fs::write(dir.join("requested"), "");
+        let guide = has_guide(&dir);
+        Some((url, dir, guide))
+    };
+    requested().into_iter().filter_map(bundle).collect()
+}
+
+/// Writes the guide for a bundle with no one watching, by the `prepare` command of the config.
+pub fn prepare(url: &str, dir: &Path) -> Result<(), String> {
+    let script = config().prepare.ok_or(format!("set \"prepare\" in {} to a command that writes a guide without asking anything (docs/config.md, \"Guides ahead of time\")", config_path().display()))?;
+    let log = fs::File::create(dir.join("generate.log")).map_err(|e| e.to_string())?;
+    let mut command = Command::new("sh");
+    command.args(["-c", &script]).env("REVUI_CLAUDE", claude()).env("REVUI_URL", url).env("REVUI_DIR", dir).env("REVUI_PROMPT", guide_prompt(url, &dir.to_string_lossy()));
+    let ran = command.stdin(std::process::Stdio::null()).stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log).status();
+    match (ran, has_guide(dir)) {
+        (Ok(status), true) if status.success() => Ok(()),
+        (Err(e), _) => Err(format!("could not run `{script}`: {e}")),
+        _ => Err(format!("no guide was written: see {}", dir.join("generate.log").display())),
+    }
 }
 
 pub fn file_url(url: &str, sha: &str, file: &str, line: u32) -> Option<String> {
@@ -523,7 +567,75 @@ pub fn has_guide(dir: &Path) -> bool {
     review.is_some_and(|v| v["sections"].as_array().is_some_and(|a| !a.is_empty()))
 }
 
+const CI_JOB: &str = "revui-guide";
+
+fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        match entry.file_type()?.is_dir() {
+            true => copy_dir(&entry.path(), &to.join(entry.file_name()))?,
+            false => drop(fs::copy(entry.path(), to.join(entry.file_name()))?),
+        }
+    }
+    Ok(())
+}
+
+/// Takes a guide someone else wrote for this head (a CI job) into a bundle that has none. The bundle keeps its own
+/// title, sources and patch, and stays as it was when the guide is for another head or does not load against the patch.
+pub fn adopt(inbox: &Path, dir: &Path) -> bool {
+    let Some(from) = [inbox.to_path_buf(), inbox.join(CI_JOB)].into_iter().find(|from| from.join("review.json").exists()) else { return false };
+    let read = |path: PathBuf| fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let (Some(mut guide), Some(own)) = (read(from.join("review.json")), read(dir.join("review.json"))) else { return false };
+    let head = |review: &serde_json::Value| review["sources"][0]["head_sha"].as_str().map(String::from);
+    if head(&guide).is_none() || head(&guide) != head(&own) || guide["sections"].as_array().is_none_or(Vec::is_empty) {
+        return false;
+    }
+    (guide["title"], guide["sources"]) = (own["title"].clone(), own["sources"].clone());
+    guide.as_object_mut().map(|guide| guide.remove("working"));
+    let before = fs::read_to_string(dir.join("review.json")).unwrap_or_default();
+    let copied = if from.join("assets").is_dir() { copy_dir(&from.join("assets"), &dir.join("assets")) } else { Ok(()) };
+    let written = copied.and_then(|_| fs::write(dir.join("review.json"), serde_json::to_string_pretty(&guide)?));
+    if written.is_err() || Bundle::load(dir).is_err() {
+        let _ = fs::write(dir.join("review.json"), before);
+        return false;
+    }
+    true
+}
+
 impl Mr {
+    /// Looks for a guide the project's CI wrote for this head: the artifact of a job named `revui-guide`.
+    fn ci_guide(&self, dir: &Path) -> bool {
+        let inbox = dir.join("ci");
+        let _ = fs::remove_dir_all(&inbox);
+        let json = |out: Result<String, String>| out.ok().and_then(|out| serde_json::from_str::<Vec<serde_json::Value>>(&out).ok()).unwrap_or_default();
+        let fetched = match self.github() {
+            true => {
+                let runs = json(gh(&["run", "list", "-R", self.repo(), "--commit", self.sha(), "--json", "databaseId", "--limit", "20"]));
+                let ids = runs.iter().filter_map(|run| run["databaseId"].as_u64());
+                ids.map(|id| id.to_string()).any(|id| gh(&["run", "download", &id, "-R", self.repo(), "-n", CI_JOB, "-D", &inbox.to_string_lossy()]).is_ok())
+            }
+            false => {
+                let project = format!("projects/{}", crate::url_encode(self.repo()));
+                let pipelines = json(glab(&["api", &format!("{project}/merge_requests/{}/pipelines?per_page=20", self.iid)]));
+                let pipeline = pipelines.iter().find(|pipeline| pipeline["sha"] == self.sha()).and_then(|pipeline| pipeline["id"].as_u64());
+                let jobs = pipeline.map(|id| json(glab(&["api", &format!("{project}/pipelines/{id}/jobs?per_page=100")]))).unwrap_or_default();
+                let job = jobs.iter().find(|job| job["name"] == CI_JOB && job["artifacts_file"].is_object()).and_then(|job| job["id"].as_u64());
+                let zip = dir.join("ci.zip");
+                let saved = job.is_some_and(|id| {
+                    let out = fs::File::create(&zip).and_then(|file| Command::new("glab").args(["api", &format!("{project}/jobs/{id}/artifacts")]).stdout(file).status());
+                    out.is_ok_and(|status| status.success())
+                });
+                let unpacked = saved && Command::new("unzip").arg("-oq").arg(&zip).arg("-d").arg(&inbox).status().is_ok_and(|status| status.success());
+                let _ = fs::remove_file(&zip);
+                unpacked
+            }
+        };
+        let adopted = fetched && adopt(&inbox, dir);
+        let _ = fs::remove_dir_all(&inbox);
+        adopted
+    }
+
     fn earlier_guide(&self) -> Option<PathBuf> {
         let current = self.dir();
         let prefix = format!("{}-{}-", self.repo().replace('/', "__"), self.iid);
@@ -589,6 +701,9 @@ impl Mr {
         if let (false, false, Some(earlier)) = (has_guide(&dir), dir.join("previous").exists(), self.earlier_guide()) {
             let _ = fs::write(dir.join("previous"), earlier.to_string_lossy().as_bytes());
         }
+        if !has_guide(&dir) {
+            self.ci_guide(&dir);
+        }
         Ok(dir)
     }
 }
@@ -603,6 +718,7 @@ struct Past {
     title: String,
     author: String,
     guide: bool,
+    requested: bool,
     items: usize,
     working: String,
     marked: usize,
@@ -638,6 +754,7 @@ fn past(dir: &Path) -> Option<Past> {
         title: text(&review["title"]),
         author: text(&source["author"]),
         guide: count(&review["sections"]) > 0,
+        requested: dir.join("requested").exists(),
         items: count(&review["items"]),
         working: text(&review["working"]),
         marked: state["verdicts"].as_object().map_or(0, |verdicts| verdicts.len()),
@@ -760,7 +877,7 @@ impl Home {
         let keys = match (self.typing, self.past.is_empty()) {
             (true, true) => format!("enter start the review · , settings · esc quit{tabs}"),
             (true, false) => format!("enter start or open · ↓ your reviews · esc clear{tabs}"),
-            _ => format!("j/k move · tab type a link or filter · r rescan · , settings{tabs} · / commands · ? help · q quit"),
+            _ => format!("j/k move · tab type a link or filter · w waiting for you · r rescan · , settings{tabs} · / commands · ? help · q quit"),
         };
         let wanted: Vec<(&str, &str, KeyCode, Color)> = match (self.typing, shown.get(sel)) {
             (false, Some(_)) => vec![("enter", "Open", KeyCode::Enter, Color::Green)],
@@ -809,6 +926,7 @@ impl Home {
                     (_, true, _, _) => Span::styled(" unfinished  ", Style::new().fg(Color::Yellow)),
                     (_, _, Some(_), _) => Span::styled(" ✓ done      ", Style::new().fg(Color::Green)),
                     (_, _, _, true) => Span::styled(" guide       ", Style::new().fg(Color::Green)),
+                    _ if past.requested => Span::styled(" waiting     ", Style::new().fg(crate::accent())),
                     _ => Span::styled(" diff        ", dim),
                 };
                 let found = match past.items {
@@ -821,6 +939,7 @@ impl Home {
                     (true, true) if past.items == 0 => facts.push("no findings yet".to_string()),
                     (true, true) => facts.push(format!("{found} so far")),
                     (false, true) => facts.push(found),
+                    (false, false) if past.requested => facts.push("asks for your review".to_string()),
                     _ => {}
                 }
                 facts.extend((past.guide && past.items > 0 && past.marked > 0).then(|| format!("{} of {} marked", past.marked, past.items)));
@@ -887,9 +1006,10 @@ pub fn config_editor() -> Command {
     command
 }
 
-const COMMANDS: [crate::Command; 7] = [
+const COMMANDS: [crate::Command; 8] = [
     ("Open this review", "enter", KeyCode::Enter),
     ("Type or paste a link to start a review, or filter your reviews", "tab", KeyCode::Tab),
+    ("Find the merge requests waiting for your review", "w", KeyCode::Char('w')),
     ("Rescan your reviews", "r", KeyCode::Char('r')),
     ("Settings: edit the config file", ", or e", KeyCode::Char(',')),
     ("Set up revui with an agent", "", KeyCode::F(11)),
@@ -1059,6 +1179,17 @@ pub fn browse(terminal: &mut DefaultTerminal, images: Picker, first: Option<Stri
             KeyCode::Char('j') | KeyCode::Down => home.sel = (home.sel + 1) % count,
             KeyCode::Char('k') | KeyCode::Up => home.sel = (home.sel + count - 1) % count,
             KeyCode::Char('r') => home.scan(),
+            KeyCode::Char('w') => {
+                home.busy = Some("Looking for merge requests waiting for your review".into());
+                let found = crate::wait(terminal, |frame| home.draw(frame), queue)?;
+                home.busy = None;
+                home.message = match (found.len(), found.iter().filter(|(_, _, guide)| !guide).count()) {
+                    (0, _) => "Nothing is waiting for your review.".into(),
+                    (all, 0) => format!("{all} waiting for your review, each with a guide."),
+                    (all, bare) => format!("{all} waiting for your review, {bare} with no guide yet: enter starts one."),
+                };
+                home.scan();
+            }
             KeyCode::F(12) if home.tabs.is_empty() => home.message = "No agent is open: one starts when you paste a link.".into(),
             KeyCode::F(12) => home.tabs.open(),
             KeyCode::Char('e' | ',') => {
@@ -1086,7 +1217,7 @@ pub fn browse(terminal: &mut DefaultTerminal, images: Picker, first: Option<Stri
         // A pasted link starts a review at once. A row opens what is there, after asking the host whether the head moved.
         let target = match (pasted.take(), code) {
             (Some(url), _) => Some((url, None, true)),
-            (None, KeyCode::Enter) => home.picked().map(|past| (past.url, Some(past.dir), false)),
+            (None, KeyCode::Enter) => home.picked().map(|past| (past.url, Some(past.dir), past.requested && !past.guide)),
             _ => None,
         };
         if let Some((url, dir, start)) = target {
@@ -1144,6 +1275,7 @@ fn your_reviews_are_read_from_the_bundles_on_disk() {
     (second.iid, second.title, second.web_url) = (3, "Tidy the cart".into(), "https://example.com/shop/web/-/merge_requests/3".into());
     second.references = References { full: "shop/web!3".into() };
     second.write_bundle(&other, "").unwrap();
+    fs::write(other.join("requested"), "").unwrap();
     let guide = r#"{"title": "Retry order submission", "working": "Reviewing part 2 of 3: Retry the submit call",
         "sources": [{"id": "mr", "head_sha": "aaaaaaaa", "patch": "mr.patch", "url": "https://example.com/shop/api/-/merge_requests/7", "reference": "!7", "repo": "shop/api", "author": "@sam"}],
         "sections": [{"title": "Retry", "why": "x", "hunks": []}],
@@ -1164,7 +1296,8 @@ fn your_reviews_are_read_from_the_bundles_on_disk() {
     let screen = format!("{}", terminal.backend());
     assert!(screen.contains("2 reviews") && screen.contains("Paste a merge request or pull request link"));
     assert!(screen.contains("unfinished") && screen.contains("api!7") && screen.contains("1 of 1 marked") && screen.contains("1 unpublished"));
-    assert!(screen.contains("diff") && screen.contains("web!3") && screen.contains("Tidy the cart"));
+    assert!(screen.contains("web!3") && screen.contains("Tidy the cart"));
+    assert!(screen.contains("waiting") && screen.contains("asks for your review"), "one that asks for your review and has no guide says so");
     home.field = "cart".into();
     terminal.draw(|frame| home.draw(frame)).unwrap();
     let screen = format!("{}", terminal.backend());
@@ -1226,4 +1359,29 @@ fn live_code_host_reads() {
     println!("base of {reference} is {:?}", base_sha(&repo, &reference, mr.sha()));
     let readme = raw_file(&repo, on_github(&reference), mr.sha(), "README.md").unwrap_or_default();
     println!("README.md at head starts {:?}", readme.lines().next());
+}
+
+#[cfg(test)]
+#[test]
+fn a_guide_written_elsewhere_is_taken_only_for_the_same_head() {
+    let root = std::env::temp_dir().join(format!("revui-adopt-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let (dir, inbox) = (root.join("bundle"), root.join("inbox").join(CI_JOB));
+    sample().write_bundle(&dir, "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-x\n+y\n").unwrap();
+    fs::create_dir_all(inbox.join("assets")).unwrap();
+    fs::write(inbox.join("assets/flow.png"), "png").unwrap();
+    let guide = |head: &str, file: &str| {
+        format!(r#"{{"title": "theirs", "working": "Reviewing part 1 of 1", "sources": [{{"id": "mr", "head_sha": "{head}", "patch": "elsewhere.patch"}}],
+            "sections": [{{"title": "Retry", "why": "w", "hunks": [{{"file": "{file}"}}]}}], "items": []}}"#)
+    };
+    let empty = fs::read_to_string(dir.join("review.json")).unwrap();
+    for (head, file) in [("an-earlier-head", "a.ts"), ("5d6e7f8a9b0c", "not-in-the-diff.ts")] {
+        fs::write(inbox.join("review.json"), guide(head, file)).unwrap();
+        assert!(!adopt(inbox.parent().unwrap(), &dir) && fs::read_to_string(dir.join("review.json")).unwrap() == empty, "{head} {file} leaves the bundle as it was");
+    }
+    fs::write(inbox.join("review.json"), guide("5d6e7f8a9b0c", "a.ts")).unwrap();
+    assert!(adopt(inbox.parent().unwrap(), &dir) && has_guide(&dir) && dir.join("assets/flow.png").exists());
+    let bundle = Bundle::load(&dir).unwrap();
+    assert_eq!((bundle.review.title.as_str(), bundle.review.sources[0].patch.as_str(), bundle.review.working.as_str()), ("Retry order submission", "mr.patch", ""));
+    let _ = fs::remove_dir_all(&root);
 }

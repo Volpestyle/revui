@@ -52,7 +52,7 @@ Most findings go out `inferred`: the person can have any of them verified with o
 - whether it is a real problem hinges on that behaviour, and reading leaves real doubt;
 - the check is cheap here: a test, a script, a request, a query, or a server the README starts with one command and no setup. Minutes, not a stack you have to work out how to start.
 
-For a blocker, the first two are enough reason to try: when the run is that cheap, do it rather than send a blocker out unverified.
+For a blocker, the first two are enough reason to try: when the run is that cheap, do it rather than send a blocker out unverified. A blocker you did not get to this way is verified at the end, in step 4, so the findings after it are not held up.
 
 Where a run happens is the person's choice, per repo. `revui drive "$dir"` prints it under "Where evidence comes from". If nothing is recorded there yet and a run needs more than the code itself (a running stack, a deployed environment), write the finding as `inferred`, say in its evidence what would settle it, and move on. Do not ask the person here, whatever `revui drive` prints about asking: that question belongs to a run they request, and the `revui-drive` skill asks it then.
 
@@ -64,8 +64,9 @@ A deployed environment only has merged code. It can show what happens today, bef
 
 When the last part is reviewed:
 
-1. Finish the summary, two short paragraphs at most: what the ticket asks and what the change does, with the placeholder line replaced by the findings that matter most, by id; then what you checked and what you did not.
-2. Remove `working`.
-3. Run `revui check "$dir"` and fix what it reports until it prints `ok`.
+1. Go back to every blocker that still has only `inferred` evidence and try to reproduce it, the way `revui skill` says under "Verify a finding". Set `working` to `Verifying <id>` while you do. A blocker ends up `confirmed` with what the run printed, `unreproduced` with what you ran, or untouched with one evidence line saying what would settle it. Leave one untouched only when the run needs a running product and `revui drive "$dir"` has no place recorded for this repo, or when it cannot be decided by running. The rule above still holds: do not ask the person where to run it.
+2. Finish the summary, two short paragraphs at most: what the ticket asks and what the change does, with the placeholder line replaced by the findings that matter most, by id; then what you checked and what you did not, naming any blocker that is still unverified.
+3. Remove `working`.
+4. Run `revui check "$dir"` and fix what it reports until it prints `ok`.
 
 Then say in a few lines what you found, by id. Do not paste the guide. Stay in the conversation: the person asks about findings, and has them verified, here.

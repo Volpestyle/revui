@@ -507,3 +507,46 @@ fn a_review_is_read_one_card_at_a_time() {
     let (ok, report) = app.bundle.check();
     assert!(!ok && report.contains("still being written"), "a guide that is still marked as being written does not pass the check");
 }
+
+#[test]
+fn marks_follow_a_review_to_the_next_head() {
+    let root = std::env::temp_dir().join(format!("revui-inherit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (old, new) = (root.join("old"), root.join("new"));
+    let patch = |line: &str| format!("diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-x\n+{line}\ndiff --git a/b.ts b/b.ts\n@@ -1 +1 @@\n-x\n+same\n");
+    let guide = |working: &str, items: &str| {
+        format!(r#"{{"title": "t", "working": "{working}", "sources": [{{"id": "mr", "head_sha": "a", "patch": "mr.patch"}}],
+            "sections": [{{"title": "s", "why": "w", "hunks": [{{"file": "a.ts"}}, {{"file": "b.ts"}}]}}], "items": [{items}]}}"#)
+    };
+    let item = |id: &str, body: &str, status: &str| format!(r#"{{"id": "{id}", "kind": "finding", "title": "t", "body": "{body}"{status}}}"#);
+    for dir in [&old, &new] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(old.join("mr.patch"), patch("one")).unwrap();
+    std::fs::write(old.join("review.json"), guide("", &[item("B1", "b", ""), item("F1", "b", ""), item("F2", "b", "")].join(","))).unwrap();
+    std::fs::write(
+        old.join("state.json"),
+        r#"{"verdicts": {"B1": "agree", "F1": "agree", "F2": "dismiss"}, "published": ["B1"], "finished": {"how": "published as one comment", "posted": true},
+            "notes": [{"text": "moved", "file": "a.ts", "line": 1, "item": null, "reply_to": null}, {"text": "still", "file": "b.ts", "line": 1, "item": null, "reply_to": null}]}"#,
+    )
+    .unwrap();
+    std::fs::write(new.join("mr.patch"), patch("two")).unwrap();
+    std::fs::write(new.join("previous"), old.to_string_lossy().as_bytes()).unwrap();
+    let items = [item("B1", "b", ""), item("F1", "b, reworded", ""), item("F2", "b", r#", "status": "resolved""#), item("F3", "b", "")].join(",");
+
+    std::fs::write(new.join("review.json"), guide("Reviewing part 1 of 1: s", &items)).unwrap();
+    assert!(Bundle::load(&new).unwrap().load_state().verdicts.is_empty(), "nothing is brought over while the guide is still being written");
+
+    std::fs::write(new.join("review.json"), guide("", &items)).unwrap();
+    let bundle = Bundle::load(&new).unwrap();
+    let state = bundle.load_state();
+    assert_eq!(state.verdicts.iter().map(|(id, verdict)| (id.as_str(), verdict.as_str())).collect::<Vec<_>>(), [("B1", "agree")], "a reworded or fixed item is yours to mark again");
+    assert!(state.published.contains("B1") && state.finished.is_none(), "what was posted is not posted twice, and the new head has no verdict yet");
+    assert_eq!((state.notes[0].file.as_deref(), state.notes[0].text.as_str()), (None, "a.ts:1 at an earlier commit: moved"), "a draft on a file that changed since leaves its line");
+    assert_eq!((state.notes[1].file.as_deref(), state.notes[1].line), (Some("b.ts"), Some(1)));
+
+    bundle.save_state(&state).unwrap();
+    std::fs::write(old.join("state.json"), r#"{"verdicts": {"F3": "agree"}}"#).unwrap();
+    assert!(!Bundle::load(&new).unwrap().load_state().verdicts.contains_key("F3"), "it happens once");
+    let _ = std::fs::remove_dir_all(&root);
+}

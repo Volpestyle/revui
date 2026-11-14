@@ -139,6 +139,9 @@ pub struct State {
     /// Per item, whether its text goes out as a quote above your comments. Unset follows the verdict.
     #[serde(default)]
     pub quotes: BTreeMap<String, bool>,
+    /// Set once the marks made at an earlier head have been brought into this one.
+    #[serde(default)]
+    pub inherited: bool,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -298,10 +301,47 @@ impl Bundle {
     }
 
     pub fn load_state(&self) -> State {
-        fs::read_to_string(self.dir.join("state.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let own = fs::read_to_string(self.dir.join("state.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
+        let mut state: State = own.unwrap_or_default();
+        let whole = !self.review.sections.is_empty() && self.review.working.trim().is_empty();
+        let earlier = fs::read_to_string(self.dir.join("previous")).ok().map(|dir| PathBuf::from(dir.trim()));
+        if let (false, true, Some(earlier)) = (state.inherited, whole, earlier.and_then(|dir| Bundle::load(&dir).ok())) {
+            self.inherit(&mut state, &earlier);
+            let _ = self.save_state(&state);
+        }
+        state
+    }
+
+    /// Brings the reviewer's marks from an earlier head into this one. A verdict follows an item that reads the same
+    /// and is not fixed; a draft on a line whose file changed since becomes a comment on the whole merge request.
+    fn inherit(&self, state: &mut State, earlier: &Bundle) {
+        let before = earlier.load_state();
+        let same = |id: &String| {
+            let now = self.review.items.iter().find(|item| item.id == *id);
+            let was = earlier.review.items.iter().find(|item| item.id == *id);
+            matches!((now, was), (Some(now), Some(was)) if now.status != Some(Status::Resolved) && now.title == was.title && now.body == was.body)
+        };
+        let diff = |bundle: &Bundle, path: &str| -> Option<Vec<(String, Vec<String>)>> {
+            let file = bundle.files.iter().find(|file| file.path == path)?;
+            Some(file.hunks.iter().map(|hunk| (hunk.header.clone(), hunk.lines.clone())).collect())
+        };
+        for (id, verdict) in before.verdicts.into_iter().filter(|(id, _)| same(id)) {
+            state.verdicts.entry(id).or_insert(verdict);
+        }
+        for (id, quote) in before.quotes.into_iter().filter(|(id, _)| same(id)) {
+            state.quotes.entry(id).or_insert(quote);
+        }
+        state.published.extend(before.published);
+        let mut notes = before.notes;
+        for note in notes.iter_mut().filter(|note| !note.posted && note.item.is_none() && note.reply_to.is_none()) {
+            let Some(file) = note.file.clone() else { continue };
+            if diff(self, &file) != diff(earlier, &file) {
+                note.text = format!("{file}:{} at an earlier commit: {}", note.line.unwrap_or(0), note.text);
+                (note.file, note.line, note.start, note.old) = (None, None, None, false);
+            }
+        }
+        notes.append(&mut state.notes);
+        (state.notes, state.inherited) = (notes, true);
     }
 
     pub fn save_state(&self, state: &State) -> std::io::Result<()> {

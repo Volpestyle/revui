@@ -17,11 +17,14 @@
 ## Quick start
 
 ```sh
-cargo install --git https://github.com/Volpestyle/revui
+curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | sh
 revui
 ```
 
-You need Rust, the CLI of your code host, signed in (`glab` for GitLab or `gh` for
+That installs the latest released binary for macOS or Linux into `~/.local/bin`.
+With Rust, `cargo install --git https://github.com/Volpestyle/revui` builds it instead.
+
+You need the CLI of your code host, signed in (`glab` for GitLab or `gh` for
 GitHub), and a coding agent: Claude Code works with no setup. Then paste the link
 of a merge request or pull request, or start with one: `revui <link>`.
 
@@ -100,6 +103,24 @@ runs against a small demo project, sped up where the badge says so.
 The agent and your editor open inside revui, so you never leave the review.
 `ctrl-q` switches between them.
 
+## When the merge request moves on
+
+A new push does not start you over. The agent reviews what changed since the head
+you read, keeps every finding's id and marks the ones that got fixed. Your marks
+come along: a verdict stays on a finding that still reads the same, and what you
+already posted is not posted twice.
+
+## Guides before you ask
+
+- `w` on your reviews lists the merge requests waiting for your review.
+- `revui prepare` writes their guides with no one watching, from a scheduler, so
+  they are there when you sit down.
+- A project's CI can write the guide in its pipeline, and revui picks it up for
+  everyone who opens that merge request. `examples/ci/` has a job for GitLab and
+  one for GitHub.
+
+[docs/config.md](docs/config.md) has the details.
+
 ## Keys
 
 Everything also works with the mouse: every hint on screen is clickable, panes
@@ -110,6 +131,7 @@ and `?` explains the screen you are on.
 | --- | --- |
 | paste | start a review of that link |
 | `tab` | type a link, or a few letters to filter |
+| `w` | find the merge requests waiting for your review |
 | `enter` | open the selected review |
 
 | In a review | |
@@ -167,6 +189,8 @@ A guide is a plain directory. revui only reads it, so anything can write one:
     revui <url>           start, or pick up, the review of that merge request
     revui <dir>           open a bundle directly
     revui fetch <url>     make or find the bundle for one, without opening it
+    revui queue           list the merge requests waiting for your review
+    revui prepare         write the guides those are missing, with no one watching
     revui help            every command
 
 <sub>The wordmark is set in <a href="https://vercel.com/font">Geist Mono</a> (OFL-1.1).</sub>

@@ -723,14 +723,6 @@ fn header(app: &App, width: u16) -> Vec<Line<'static>> {
     let dim = Style::new().fg(Color::DarkGray);
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let join = |parts: &[&str]| parts.iter().filter(|p| !p.is_empty()).copied().collect::<Vec<_>>().join(" · ");
-    let count = |done: usize, total: usize| {
-        let color = match (total, done >= total) {
-            (0, _) => Color::DarkGray,
-            (_, true) => Color::Green,
-            (_, false) => Color::Yellow,
-        };
-        Span::styled(format!("{done}/{total}"), Style::new().fg(color))
-    };
     let mut open = String::new();
     if !app.tabs.terms.is_empty() {
         let numbered: Vec<_> = app.tabs.terms.iter().enumerate().map(|(i, tab)| format!("{} {}", i + 1, tab.name)).collect();
@@ -769,7 +761,7 @@ fn header(app: &App, width: u16) -> Vec<Line<'static>> {
                 };
                 line.extend([spinner(), Span::styled(format!(" {working} · {found} · "), Style::new().fg(accent()))]);
             }
-            line.extend([count(app.state.verdicts.len(), review.items.len()), Span::styled(format!(" · {rest}"), dim)]);
+            line.push(Span::styled(rest, dim));
             Line::from(line)
         }
         (None, false) => Line::styled(format!(" {}", app.note), Style::new().fg(Color::Yellow)),

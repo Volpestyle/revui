@@ -1517,11 +1517,15 @@ fn picker() -> Picker {
     let mut picker = match known {
         Some(font) => Picker::from_fontsize(font.into()),
         None => {
+            let started = std::time::Instant::now();
             let asked = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-            // An unanswered query (tmux without allow-passthrough) leaves its reader thread blocked on stdin, where it
-            // eats the next key or cursor report. A plain status report gets answered and lets that thread finish.
-            let _ = std::io::Write::write_all(&mut std::io::stdout(), b"\x1b[5n").and_then(|()| std::io::Write::flush(&mut std::io::stdout()));
-            std::thread::sleep(std::time::Duration::from_millis(40));
+            // An unanswered query (tmux without allow-passthrough) gives up after two seconds and leaves its reader thread
+            // blocked on stdin, where it eats the next key or cursor report. A plain status report gets answered and lets
+            // that thread finish. Never after an answered query: no thread is left, and crossterm would wait on the reply.
+            if started.elapsed() >= std::time::Duration::from_secs(2) {
+                let _ = std::io::Write::write_all(&mut std::io::stdout(), b"\x1b[5n").and_then(|()| std::io::Write::flush(&mut std::io::stdout()));
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
             while event::poll(std::time::Duration::from_millis(60)).unwrap_or(false) {
                 let _ = event::read();
             }

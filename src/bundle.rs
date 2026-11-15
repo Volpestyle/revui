@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Review {
     pub title: String,
     #[serde(default)]
@@ -22,7 +22,7 @@ pub struct Review {
     pub items: Vec<Item>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Source {
     pub id: String,
     pub head_sha: String,
@@ -41,7 +41,7 @@ pub struct Source {
     pub target: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Section {
     pub title: String,
     #[serde(default)]
@@ -50,14 +50,14 @@ pub struct Section {
     pub hunks: Vec<HunkRef>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct HunkRef {
     pub source: Option<String>,
     pub file: String,
     pub hunk: Option<usize>,
 }
 
-#[derive(Deserialize, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Finding,
@@ -65,7 +65,7 @@ pub enum Kind {
     Good,
 }
 
-#[derive(Deserialize, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     Confirmed,
@@ -73,7 +73,7 @@ pub enum Status {
     Resolved,
 }
 
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Provenance {
     Observed,
@@ -81,7 +81,7 @@ pub enum Provenance {
     Inferred,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Item {
     pub id: String,
     pub kind: Kind,
@@ -99,13 +99,13 @@ pub struct Item {
     pub evidence: Vec<Evidence>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct At {
     pub file: String,
     pub line: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Evidence {
     pub provenance: Provenance,
     pub caption: String,
@@ -114,6 +114,7 @@ pub struct Evidence {
     pub repro: Option<String>,
 }
 
+#[derive(Serialize)]
 pub struct Hunk {
     pub header: String,
     pub old_start: u32,
@@ -121,6 +122,7 @@ pub struct Hunk {
     pub lines: Vec<String>,
 }
 
+#[derive(Serialize)]
 pub struct FileDiff {
     pub source: String,
     pub path: String,

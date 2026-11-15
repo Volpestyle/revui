@@ -645,3 +645,18 @@ fn a_product_reader_gets_the_finding_in_product_terms_first() {
     assert!(!engineer.contains("charged twice") && engineer.contains("idempotency key") && engineer.contains("@@ -1 +1 @@"), "today's view is unchanged: {engineer}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn another_front_end_reads_the_review_and_cannot_post_without_a_merge_request() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
+    let bundle = Bundle::load(&dir).unwrap();
+    let read: serde_json::Value = serde_json::from_str(&shared::json(&bundle)).unwrap();
+    assert_eq!(read["review"]["items"][0]["id"], "B1");
+    assert_eq!(read["groups"].as_array().unwrap().len(), bundle.groups.len());
+    assert_eq!(read["quoted"]["B1"], false, "nothing is quoted before a verdict");
+    assert!(read["preview"].as_str().unwrap().ends_with("No comments."));
+    let mut state = State::default();
+    state.verdicts.insert("B1".into(), "agree".into());
+    assert!(shared::preview(&bundle, &state).contains("> **A retry can create the order twice**"), "an agreed finding goes out quoted");
+    assert!(shared::posting(&bundle, &state, 0, String::new()).is_err(), "the demo names no merge request, so there is nowhere to post");
+}

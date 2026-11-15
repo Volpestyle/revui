@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 pub struct Term {
     parser: Arc<Mutex<vt100::Parser>>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     size: (u16, u16),
@@ -61,15 +61,24 @@ impl Term {
         let child = slave.spawn_command(builder).map_err(|e| e.to_string())?;
         drop(slave);
         let mut reader = master.try_clone_reader().map_err(|e| e.to_string())?;
-        let writer = master.take_writer().map_err(|e| e.to_string())?;
+        let writer = Arc::new(Mutex::new(master.take_writer().map_err(|e| e.to_string())?));
         let parser = Arc::new(Mutex::new(vt100::Parser::new(cells(rows), cells(cols), 2000)));
         let dirty = Arc::new(AtomicBool::new(true));
         let last_output = Arc::new(Mutex::new(std::time::Instant::now()));
-        let (shared, changed, heard) = (parser.clone(), dirty.clone(), last_output.clone());
+        let (shared, changed, heard, answers) = (parser.clone(), dirty.clone(), last_output.clone(), writer.clone());
         std::thread::spawn(move || {
             let mut bytes = [0u8; 8192];
             while let Ok(n @ 1..) = reader.read(&mut bytes) {
-                shared.lock().unwrap().process(&bytes[..n]);
+                let mut parser = shared.lock().unwrap();
+                parser.process(&bytes[..n]);
+                let asked = |query: &[u8]| bytes[..n].windows(query.len()).any(|seen| seen == query);
+                let (row, col) = parser.screen().cursor_position();
+                let reply: String = [asked(b"\x1b[5n").then(|| "\x1b[0n".to_string()), asked(b"\x1b[6n").then(|| format!("\x1b[{};{}R", row + 1, col + 1))].into_iter().flatten().collect();
+                drop(parser);
+                if !reply.is_empty() {
+                    let mut writer = answers.lock().unwrap();
+                    let _ = writer.write_all(reply.as_bytes()).and_then(|_| writer.flush());
+                }
                 changed.store(true, Ordering::Relaxed);
                 *heard.lock().unwrap() = std::time::Instant::now();
             }
@@ -109,18 +118,21 @@ impl Term {
             _ if x > 222 || y > 222 => return,
             _ => [b"\x1b[M".as_slice(), &[32, 32 + x as u8, 32 + y as u8], b"\x1b[M", &[35, 32 + x as u8, 32 + y as u8]].concat(),
         };
-        let _ = self.writer.write_all(&bytes).and_then(|_| self.writer.flush());
+        let mut writer = self.writer.lock().unwrap();
+        let _ = writer.write_all(&bytes).and_then(|_| writer.flush());
     }
 
     pub fn type_text(&mut self, text: &str) {
         let bracketed = self.parser.lock().unwrap().screen().bracketed_paste();
         let pasted = if bracketed { format!("\x1b[200~{text}\x1b[201~") } else { text.to_string() };
-        let _ = self.writer.write_all(pasted.as_bytes()).and_then(|_| self.writer.flush());
+        let mut writer = self.writer.lock().unwrap();
+        let _ = writer.write_all(pasted.as_bytes()).and_then(|_| writer.flush());
     }
 
     /// Presses return, to send what `type_text` put in the program's input.
     pub fn submit(&mut self) {
-        let _ = self.writer.write_all(b"\r").and_then(|_| self.writer.flush());
+        let mut writer = self.writer.lock().unwrap();
+        let _ = writer.write_all(b"\r").and_then(|_| writer.flush());
     }
 
     pub fn quiet_for(&self) -> std::time::Duration {
@@ -155,7 +167,8 @@ impl Term {
             _ => return,
         };
         bytes.extend_from_slice(sequence);
-        let _ = self.writer.write_all(&bytes).and_then(|_| self.writer.flush());
+        let mut writer = self.writer.lock().unwrap();
+        let _ = writer.write_all(&bytes).and_then(|_| writer.flush());
     }
 
     pub fn render(&mut self, area: Rect, buffer: &mut Buffer) -> Option<Position> {

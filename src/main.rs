@@ -628,6 +628,7 @@ impl App {
             self.note = if delta > 0 && !self.bundle.review.working.trim().is_empty() { "Nothing after this yet.".into() } else { String::new() };
             return;
         }
+        self.note.clear();
         self.select(next as usize);
         if self.focus != 0 {
             self.focus = 1;

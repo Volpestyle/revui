@@ -170,6 +170,72 @@ A tmux split that is reused:
       "run": "tmux split-window -h -P -F '#{pane_id}' -e \"REVUI_PROMPT=$REVUI_PROMPT\" 'claude \"$REVUI_PROMPT\"'",
       "send": "tmux send-keys -t \"$REVUI_SESSION\" \"$REVUI_PROMPT\" Enter" }
 
+### In your app
+
+Entries for apps that have their own chat, panes or browser. Each was run as written
+here, with the paths changed; `revui setup` can write them for you.
+
+**Cursor**, from its terminal. The prompt opens in Cursor's chat through its own link
+handler. Cursor asks you to confirm each one and starts a new chat every time, so
+there is no `send`. `workspace` is the name of the folder the Cursor window has open.
+
+    "agents": [
+      { "name": "Cursor chat",
+        "run": "open \"cursor://anysphere.cursor-deeplink/prompt?workspace=shop&text=$(jq -rn --arg p \"$REVUI_PROMPT\" '$p|@uri')\"" }
+    ],
+    "open": "cursor -d \"${REVUI_BASE_FILE:-/dev/null}\" \"$HOME/code/shop/$REVUI_FILE\""
+
+**Orca**, from a terminal in the workspace of the merge request. The CLI is inside
+`Orca.app/Contents/Resources/bin` when it is not on your PATH.
+
+    "agents": [
+      { "name": "Orca chat",
+        "run": "orca agent launch --agent claude --surface chat --focus --prompt \"$REVUI_PROMPT\"" }
+    ],
+    "open": "orca file open \"$HOME/code/shop/$REVUI_FILE\" --line \"$REVUI_LINE\" --focus",
+    "drive": "Web pages: Orca's embedded browser, in a tab of this workspace (orca tab create --url <url>, then orca snapshot, orca click and orca screenshot)."
+
+**Herdr**, from a pane of the desktop app:
+
+    "agents": [
+      { "name": "Herdr split",
+        "run": "herdr-browser do terminal.open --place right --argv \"$(jq -cn --arg p \"$REVUI_PROMPT\" '[\"claude\",$p]')\"",
+        "send": "hc send \"$(printf %s \"$REVUI_SESSION\" | jq -r .terminal)\" \"$REVUI_PROMPT\"" }
+    ],
+    "drive": "Web pages: Herdr's in-app browser, in a pane beside you (herdr-browser do browser.open --url <url> --place right)."
+
+**Ghostty**, through its AppleScript. `run` is a script that splits the terminal revui
+is in and prints the new split's id, and `send` types into that split:
+
+    #!/bin/sh
+    # ghostty-split.sh
+    exec osascript <<'AS'
+    set thePrompt to system attribute "REVUI_PROMPT"
+    tell application "Ghostty"
+      set cfg to new surface configuration
+      set command of cfg to "/bin/zsh -lc 'claude \"$REVUI_PROMPT\"'"
+      set environment variables of cfg to {"REVUI_PROMPT=" & thePrompt}
+      set here to focused terminal of selected tab of front window
+      return id of (split here direction right with configuration cfg)
+    end tell
+    AS
+
+    #!/bin/sh
+    # ghostty-send.sh
+    exec osascript <<'AS'
+    set thePrompt to system attribute "REVUI_PROMPT"
+    set theSplit to system attribute "REVUI_SESSION"
+    tell application "Ghostty"
+      set target to first terminal whose id is theSplit
+      input text thePrompt to target
+      send key "enter" to target
+    end tell
+    AS
+
+    "agents": [
+      { "name": "Ghostty split", "run": "~/bin/ghostty-split.sh", "send": "~/bin/ghostty-send.sh" }
+    ]
+
 Agents learn how to read and update a bundle from `revui skill`, which the prompt
 tells them to run. `revui skill install` also installs it as a Claude Code skill,
 so any session can work on a bundle when you ask.

@@ -166,6 +166,26 @@ and `?` explains the screen you are on.
 
 Agents, editors and panes are not built-in integrations: each is one command in the config. `revui setup` has your agent look at your machine, ask where things should open, and write those commands for you.
 
+## In your setup
+
+revui's own tabs need nothing set up. Inside an app that has its own chat, panes or browser, it can use those instead: each is a line or two of config, listed in [docs/config.md](docs/config.md#in-your-app). These are real runs against the demo project, sped up where the badge says so.
+
+**Cursor.** `t` hands the finding to Cursor's own chat, and `o` opens the change in Cursor's diff. `d` hides revui's diff pane, since the editor is right there.
+
+<p align="center"><img src="docs/in-cursor.gif" alt="revui in Cursor's terminal: the finding goes to Cursor's chat, and the change opens in Cursor's diff" width="900"></p>
+
+**Orca.** `v` starts a native Orca chat that reproduces the finding and shows the page in Orca's browser, beside the chat. `o` opens the file in an Orca tab.
+
+<p align="center"><img src="docs/in-orca.gif" alt="revui in Orca: an Orca chat verifies a finding and shows the result in Orca's browser" width="900"></p>
+
+**Herdr.** The agent opens in a split pane beside the review, and shows what it ran in Herdr's browser.
+
+<p align="center"><img src="docs/in-herdr.gif" alt="revui in Herdr: the agent in a split pane, the orders page in Herdr's browser" width="900"></p>
+
+**Ghostty.** Pictures draw inline at full resolution. The agent can stay in revui's tabs, or open in a Ghostty split, as here.
+
+<p align="center"><img src="docs/in-ghostty.gif" alt="revui in Ghostty: the agent draws a diagram in a split, and it appears beside the finding" width="900"></p>
+
 ## Configuration
 
 There is nothing you have to configure. `~/.config/revui/config.json` is for

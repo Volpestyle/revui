@@ -31,22 +31,19 @@ of a merge request or pull request, or start with one: `revui <link>`.
 The agent starts in a tab and reviews the change. The summary lands first, and
 you read it while the findings arrive one by one.
 
-> The screenshots and recordings below show the earlier layout, with a list of
-> merge requests and a list of findings beside the code. They are due a re-record.
-
 ## What you get
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/list.png" alt="The list of open pull requests"></td>
-    <td width="50%"><img src="docs/guide.png" alt="A guide's overview"></td>
+    <td width="50%"><img src="docs/list.png" alt="The list of reviews, with one that is done"></td>
+    <td width="50%"><img src="docs/guide.png" alt="The summary card of a review, with a map of where the change sits"></td>
   </tr>
   <tr>
     <td><b>Your reviews.</b> Every link you pasted, the latest first, with where you left off. No repos to configure, nothing loaded until you ask.</td>
     <td><b>One card at a time, not a wall of diff.</b> The summary, then each part of the change, the core first, with the findings for its code.</td>
   </tr>
   <tr>
-    <td><img src="docs/finding.png" alt="A finding with its evidence and a screenshot"></td>
+    <td><img src="docs/finding.png" alt="A finding with its evidence and a diagram"></td>
     <td><img src="docs/publish.png" alt="The exact text of a review before it is posted"></td>
   </tr>
   <tr>
@@ -69,11 +66,9 @@ runs against a small demo project, sped up where the badge says so.
 
 **Nothing to set up.** With Claude Code and `gh` or `glab` on your machine, the first paste works. `revui setup` is there when you want your own editor, another agent, or agents in a pane of your terminal app.
 
-<p align="center"><img src="docs/setup.gif" alt="An agent looks at the machine, asks a few questions and writes the config" width="900"></p>
-
 **Paste a link.** The agent reviews the merge request and writes as it goes: the summary and the parts first, then each finding the moment it has one. `g` does the same for a review that has no guide yet.
 
-<p align="center"><img src="docs/generate.gif" alt="Generating a guide for a pull request" width="900"></p>
+<p align="center"><img src="docs/generate.gif" alt="Pasting a pull request link: the agent reviews it and the cards arrive" width="900"></p>
 
 **Ask about what you are looking at.** `t` goes to the agent, already told which finding you are on. `ctrl-q` switches between the review and the agent.
 

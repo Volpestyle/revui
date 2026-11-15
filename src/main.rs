@@ -941,6 +941,7 @@ impl App {
             .env("REVUI_HEAD_FILE", head_file)
             .env("REVUI_BASE_FILE", base_file)
             .env("REVUI_SOCKET", std::env::temp_dir().join(format!("revui-{}.sock", std::process::id())))
+            .env("REVUI_PROMPT_URI", url_encode(&prompt))
             .env("REVUI_PROMPT", prompt);
         command
     }

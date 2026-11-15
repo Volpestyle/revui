@@ -27,6 +27,7 @@ pasting text into the command line:
 | `$REVUI_FILE`, `$REVUI_LINE`, `$REVUI_FILE_URL` | the file and line under the cursor, and its link on the web |
 | `$REVUI_HEAD_FILE`, `$REVUI_BASE_FILE` | that file at the head and before the change, fetched read-only |
 | `$REVUI_PROMPT`, `$REVUI_ITEM` | what revui would say to an agent, and the finding it is about |
+| `$REVUI_PROMPT_URI` | the same prompt, encoded for a URL |
 | `$REVUI_SESSION_ID`, `$REVUI_SESSION` | a new agent's id, and whatever its `run` command printed |
 | `$REVUI_SOCKET` | a socket path that is stable for the session, for editors that take remote commands |
 | `$REVUI_CLAUDE` | the `claude` setting |
@@ -138,8 +139,24 @@ An agent that is still writing a guide keeps running when you go back to your
 reviews; one that is idle is closed, and resumed the next time you ask.
 
 Where an agent opens is the `agents` list in the config. The first entry is the
-default. Out of the box there is one, which runs Claude Code in a full-screen tab
-over the review. `ctrl-q` goes back to the review while it keeps working, and
+default, and `T`, `V` and `I` offer the others.
+
+With no `agents` in the config, revui picks from where it is running:
+
+| Running in | Default | Also offered |
+| --- | --- | --- |
+| a plain terminal | a tab inside revui | |
+| tmux | a tmux split, or a tmux window when the terminal is under 200 columns | the other one, a tab inside revui |
+| Herdr (the desktop app) | a split pane, or a tab under 200 columns | the other one, a tab inside revui |
+| Orca | an Orca terminal tab | an Orca split, a tab inside revui, an Orca chat |
+| Cursor | a tab inside revui | Cursor's chat |
+
+A split halves the review's width, so it is only the default when the terminal is
+wide enough to leave the review about a hundred columns. Follow-ups go to the pane
+the agent first opened in. A chat that starts over on every ask (Cursor's, Orca's)
+is offered but never the default.
+
+The tab inside revui runs Claude Code in a full-screen tab over the review. `ctrl-q` goes back to the review while it keeps working, and
 `ctrl-q` again, or the tab's number, brings the tabs forward. Keep `ctrl` held and
 press `q` again to step through the tabs; let go, and the next `ctrl-q` goes back
 to the review. That needs a terminal that reports key releases (`revui probe` says

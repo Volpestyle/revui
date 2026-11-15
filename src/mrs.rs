@@ -38,8 +38,42 @@ pub struct Agent {
     pub modal: bool,
 }
 
-pub fn agents() -> Vec<Agent> {
-    let agent = Agent {
+/// The program revui runs inside, when it has panes or a chat of its own an agent can open in.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Host {
+    Plain,
+    Tmux,
+    Herdr,
+    Orca,
+    Cursor,
+}
+
+/// At this many columns a split leaves the review about a hundred, enough for a finding beside its picture.
+const SPLIT_COLUMNS: u16 = 200;
+
+/// tmux first, since it runs inside the others. Then the terminal's own name, which a program started from
+/// another app's terminal does not inherit, unlike that app's other variables.
+pub fn host(var: impl Fn(&str) -> Option<String>) -> Host {
+    let set = |name: &str| var(name).is_some_and(|value| !value.is_empty());
+    let program = var("TERM_PROGRAM").unwrap_or_default();
+    let cursor = set("CURSOR_TRACE_ID") || var("__CFBundleIdentifier").is_some_and(|id| id == "com.todesktop.230313mzl4w4u92");
+    match program.as_str() {
+        _ if set("TMUX") => Host::Tmux,
+        "Orca" if set("ORCA_TERMINAL_HANDLE") => Host::Orca,
+        "vscode" if cursor => Host::Cursor,
+        "vscode" | "Orca" => Host::Plain,
+        _ if set("HC_TERMINAL_ID") => Host::Herdr,
+        _ => Host::Plain,
+    }
+}
+
+/// Where an agent opens when the config does not say: in a pane of the host, a split when the terminal is wide
+/// enough to share and a tab of the host otherwise, with the other and revui's own tab one key away. A host whose
+/// chat cannot take a follow-up (it starts a new one each time) is offered, never the default.
+pub fn presets(host: Host, columns: u16) -> Vec<Agent> {
+    let pane = |name: &str, run: &str, send: &str| Agent { name: name.into(), run: run.into(), send: Some(send.into()), resume: None, foreground: false, modal: false };
+    let chat = |name: &str, run: &str| Agent { name: name.into(), run: run.into(), send: None, resume: None, foreground: false, modal: false };
+    let own = Agent {
         name: "agent".into(),
         run: "$REVUI_CLAUDE --session-id \"$REVUI_SESSION_ID\"".into(),
         resume: Some("$REVUI_CLAUDE --resume \"$REVUI_SESSION_ID\"".into()),
@@ -47,7 +81,48 @@ pub fn agents() -> Vec<Agent> {
         foreground: false,
         modal: true,
     };
-    let mut agents = config().agents.filter(|agents| !agents.is_empty()).unwrap_or_else(|| vec![agent]);
+    let panes = |split: Agent, tab: Agent| if columns >= SPLIT_COLUMNS { vec![split, tab] } else { vec![tab, split] };
+    match host {
+        Host::Plain => vec![own],
+        Host::Tmux => {
+            let start = "-P -F '#{pane_id}' -e \"REVUI_CLAUDE=$REVUI_CLAUDE\" -e \"REVUI_PROMPT=$REVUI_PROMPT\" '$REVUI_CLAUDE \"$REVUI_PROMPT\"'";
+            let send = "tmux send-keys -t \"$REVUI_SESSION\" -l \"$REVUI_PROMPT\" && tmux send-keys -t \"$REVUI_SESSION\" Enter";
+            let mut agents = panes(
+                pane("tmux split", &format!("tmux split-window -h -t \"$TMUX_PANE\" {start}"), send),
+                pane("tmux window", &format!("tmux new-window {start}"), send),
+            );
+            agents.push(own);
+            agents
+        }
+        Host::Herdr => {
+            let start = |place: &str| format!("herdr-browser do terminal.open --place {place} --argv \"$(jq -cn --arg p \"$REVUI_PROMPT\" --arg c \"$REVUI_CLAUDE \\\"\\$1\\\"\" '[\"zsh\",\"-lic\",$c,\"zsh\",$p]')\"");
+            let send = "hc send \"$(printf %s \"$REVUI_SESSION\" | jq -r .terminal)\" \"$REVUI_PROMPT\"";
+            let mut agents = panes(pane("Herdr split", &start("right"), send), pane("Herdr tab", &start("tab"), send));
+            agents.push(own);
+            agents
+        }
+        Host::Orca => {
+            // The prompt goes through a file: Orca types the command into a shell, where a prompt's quotes would break it.
+            let orca = "\"${ORCA_CLI_BIN_DIR:+$ORCA_CLI_BIN_DIR/}orca\"";
+            let start = |how: &str| format!("f=$(mktemp) && printf %s \"$REVUI_PROMPT\" > \"$f\" && {orca} terminal {how} --command \"$REVUI_CLAUDE \\\"\\$(cat $f)\\\"\" --json | sed -n 's/.*\"handle\": *\"\\([^\"]*\\)\".*/\\1/p' | head -1");
+            let send = format!("{orca} terminal send --terminal \"$REVUI_SESSION\" --text \"$REVUI_PROMPT\" --enter");
+            // ponytail: a tab whatever the width. A split is offered, not the default, until it is proven with the window on screen:
+            // Orca's CLI timed out waiting for the new pane when its window was in the background.
+            let mut agents = vec![
+                pane("Orca tab", &start("create --worktree \"id:$ORCA_WORKTREE_ID\" --focus"), &send),
+                pane("Orca split", &start("split --terminal \"$ORCA_TERMINAL_HANDLE\" --direction vertical"), &send),
+            ];
+            agents.push(own);
+            agents.push(chat("Orca chat", &format!("{orca} agent launch --agent claude --surface chat --focus --worktree \"id:$ORCA_WORKTREE_ID\" --prompt \"$REVUI_PROMPT\"")));
+            agents
+        }
+        Host::Cursor => vec![own, chat("Cursor chat", "u=\"cursor://anysphere.cursor-deeplink/prompt?text=$REVUI_PROMPT_URI\"; open \"$u\" 2>/dev/null || xdg-open \"$u\"")],
+    }
+}
+
+pub fn agents() -> Vec<Agent> {
+    let columns = ratatui::crossterm::terminal::size().map_or(0, |(columns, _)| columns);
+    let mut agents = config().agents.filter(|agents| !agents.is_empty()).unwrap_or_else(|| presets(host(|name| std::env::var(name).ok()), columns));
     for agent in &mut agents {
         agent.modal |= std::mem::take(&mut agent.foreground);
     }

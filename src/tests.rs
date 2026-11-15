@@ -598,3 +598,23 @@ fn the_summary_opens_with_where_the_change_sits() {
     assert!(app.evidence_path().is_none(), "the map belongs to the summary, not to the parts");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn the_host_decides_where_an_agent_opens() {
+    use crate::mrs::{host, presets, Host};
+    let inside = |vars: &'static [(&'static str, &'static str)]| host(move |name| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string()));
+    assert_eq!(inside(&[("TERM_PROGRAM", "ghostty")]), Host::Plain);
+    assert_eq!(inside(&[("TERM_PROGRAM", "ghostty"), ("HC_TERMINAL_ID", "t1")]), Host::Herdr);
+    assert_eq!(inside(&[("TERM_PROGRAM", "Orca"), ("ORCA_TERMINAL_HANDLE", "term_1"), ("HC_TERMINAL_ID", "t1")]), Host::Orca, "an app started from another's terminal keeps that one's variables");
+    assert_eq!(inside(&[("TERM_PROGRAM", "vscode"), ("CURSOR_TRACE_ID", "x"), ("HC_TERMINAL_ID", "t1")]), Host::Cursor);
+    assert_eq!(inside(&[("TERM_PROGRAM", "vscode"), ("HC_TERMINAL_ID", "t1")]), Host::Plain, "VS Code has no chat to hand a prompt to");
+    assert_eq!(inside(&[("TERM_PROGRAM", "Orca"), ("ORCA_TERMINAL_HANDLE", "term_1"), ("TMUX", "/tmp/tmux-1/default,1,0")]), Host::Tmux, "tmux runs inside the others");
+
+    let names = |host, columns| presets(host, columns).into_iter().map(|agent| agent.name).collect::<Vec<_>>();
+    assert_eq!(names(Host::Plain, 240), ["agent"]);
+    assert_eq!(names(Host::Tmux, 240), ["tmux split", "tmux window", "agent"], "wide enough to share: a split");
+    assert_eq!(names(Host::Tmux, 150), ["tmux window", "tmux split", "agent"], "too narrow: a window of its own");
+    assert_eq!(names(Host::Herdr, 199)[0], "Herdr tab");
+    assert_eq!(names(Host::Cursor, 240)[0], "agent", "a chat that cannot take a follow-up is offered, not the default");
+    assert!(presets(Host::Tmux, 240).iter().take(2).all(|agent| !agent.modal && agent.send.is_some()), "a pane takes follow-ups");
+}

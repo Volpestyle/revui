@@ -13,6 +13,7 @@ Look first, then ask. Find out what you can from the machine, and put the questi
 3. Which editor should files open in? (step 3)
 4. Does your team have its own review skill, or should the review's agent write guides? (step 4)
 5. How may an agent run the product and drive a browser without taking over your screen? (step 5)
+6. Do you read the code in a review, or do you review what it means for the product? (step 6)
 
 Do not ask what the machine already answers, and do not write a key for anything they left at the default.
 
@@ -22,7 +23,7 @@ There are no repos to list: the person pastes the link of a merge request or pul
 
 ## 2. Where an agent opens
 
-Each review has one coding agent, from the `agents` list: it reviews the merge request when its link is pasted, and `t` (ask) and `v` (verify) go back to it. The first entry is the default. With no `agents` key, revui runs Claude Code in a tab inside itself, which works everywhere, so only write this key when the person wants something else. Ask which coding agent they use and where they like it to open.
+Each review has one coding agent, from the `agents` list: it reviews the merge request when its link is pasted, and `t` (ask) and `v` (verify) go back to it. The first entry is the default. With no `agents` key, revui picks from where it runs: a pane of tmux, Herdr or Orca when it is inside one (a split when the terminal is wide, a tab otherwise), and a tab inside itself everywhere else. Only write this key when the person wants something other than that. Ask which coding agent they use and where they like it to open.
 
 See where revui is running before you ask, so you can offer what applies:
 
@@ -93,6 +94,14 @@ With nothing set, the review's agent writes the guide: revui tells it to run `re
 
     { "drive": "Web pages: Playwright, headless. Local stack: the run-local skill. Never the system browser." }
 
-## 6. Finish
+## 6. Who is reading
+
+Ask whether they read the code or review what a change means for the product. For someone who does not read code (a product manager, a designer, support), set:
+
+    { "audience": "product" }
+
+Each card then leads with the finding in product terms, the technical text sits under "In detail", and the diff starts hidden (`d` shows it). Leave the key out for anyone who reads the code: that is the default.
+
+## 7. Finish
 
 Run `revui doctor` until it exits 0. Then tell the person, in a few lines: that pasting a link starts a review, where the agent and files will open, and that `,` inside revui opens this config again.

@@ -17,6 +17,7 @@ generator then fills in `review.json` and leaves `title` and `sources` as they a
     {
       "title": "Retry order submission",
       "summary": "What the change does and how it was reviewed.",
+      "plain": "What changes for the people using the product.",
       "working": "Reviewing part 2 of 4: Retry the submit call",
       "map": { "provenance": "inferred", "caption": "The API now retries, through a new queue", "path": "assets/map.png", "text": "1. ..." },
       "sources": [ ...written by revui fetch, keep as is... ],
@@ -39,6 +40,7 @@ generator then fills in `review.json` and leaves `title` and `sources` as they a
           "section": 0,
           "title": "A retry can create the order twice",
           "body": "What breaks, the path that gets there, and what to do about it.",
+          "plain": "A customer can be charged twice for one checkout.",
           "at": { "file": "src/submit.ts", "line": 11 },
           "evidence": [
             {
@@ -57,6 +59,12 @@ Text fields are plain text: newlines are kept, markdown is not rendered, so writ
 a link as a bare URL. Keep `summary` to two short paragraphs at most. In an item's
 `body`, a line that starts with `# ` is shown as a sub-heading: use it to label the
 parts of a longer finding, each on its own line.
+
+`plain`, on the review and on each item, says the same thing for a reader who does not
+read code: what a person using the product would see, in a sentence or two, with no
+file names or function names. A reader whose config sets `"audience": "product"` gets
+it first, with the rest under "In detail". Others never see it, so it is no place for
+anything the summary or the body does not also say.
 
 `working` is there only while the guide is being written: one line saying what is
 being reviewed right now. The viewer shows it next to a spinner and tells the reader

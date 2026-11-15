@@ -24,7 +24,7 @@ The person is waiting with the viewer open, so get them something to read before
 
 Write the outline to `review.json` in one go, as soon as you understand the shape of the change:
 
-- **Summary**: one short paragraph. What the ticket asks and what the change does, including anything beyond the ask. Then one line naming the part you expect to matter most, so the reader knows where the risk is before the findings arrive. That line is a placeholder: the finished summary replaces it.
+- **Summary**: one short paragraph. What the ticket asks and what the change does, including anything beyond the ask. Then one line naming the part you expect to matter most, so the reader knows where the risk is before the findings arrive. That line is a placeholder: the finished summary replaces it. Also write `plain`: the same in a sentence or two for someone who does not read code, as what changes for the people using the product.
 - **Parts** (`sections`): group hunks that belong together, the core of the change first, supporting code next, low-signal churn (renames, generated files, formatting) last. Each part gets one paragraph on why it exists. Place every hunk: split a file across parts by hunk when its hunks serve different purposes. This order is the order you review in and the order the person reads in, so do not change it later.
 - **`working`**: `Reviewing part 1 of N: <title>`.
 
@@ -64,7 +64,7 @@ Take the parts in order. For each, read its changed files whole, not only their 
 **Write each finding to `review.json` the moment you have it**, then go on. Do not hold findings back to sort or polish them: the person reads the first while you look for the second. When you move to the next part, update `working`.
 
 - **Ids**: by severity, numbered as they are found: `B1`, `F1`, `S1`, `Q1`, with `severity` set to exactly `blocker`, `fix`, `suggestion` or `question` (the format allows any text; guides written with this skill use these four). Good calls are `G1`, `G2`, with no `severity`. An id never changes once it is in the file.
-- **Items**: each under the part whose code it is about, with `at` pointing at the line to fix. In the body, put what breaks, the path to it, and what to do instead, each under its own `# ` heading. A `Q` about a choice the change made where the ticket was silent is a `decision`.
+- **Items**: each under the part whose code it is about, with `at` pointing at the line to fix. Give each a `plain`: one or two sentences on what a person using the product would see, with no file or function names ("A customer can be charged twice for one checkout"). When a finding changes nothing they could see, say that ("Nothing a customer would notice: it makes the next change here harder"). In the body, put what breaks, the path to it, and what to do instead, each under its own `# ` heading. A `Q` about a choice the change made where the ticket was silent is a `decision`.
 - **Evidence**: only what you have. Something you worked out by reading is `inferred`. Output of something you ran is `observed`, with the command as `repro` and whole lines of output. Never mark as `observed` what was not run.
 
 ### When to capture evidence before the person asks

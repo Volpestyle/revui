@@ -8,6 +8,9 @@ pub struct Review {
     pub title: String,
     #[serde(default)]
     pub summary: String,
+    /// The summary for a reader who does not read code: what changes for the people using the product, and what could go wrong for them.
+    #[serde(default)]
+    pub plain: String,
     /// What the generator is reviewing right now. Set while the guide is still being written, gone when it is whole.
     #[serde(default)]
     pub working: String,
@@ -87,6 +90,9 @@ pub struct Item {
     pub section: Option<usize>,
     pub title: String,
     pub body: String,
+    /// The same finding in product terms: what a person using the product would see.
+    #[serde(default)]
+    pub plain: String,
     pub at: Option<At>,
     pub status: Option<Status>,
     #[serde(default)]

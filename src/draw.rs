@@ -321,6 +321,10 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
     match app.rows.get(app.sel) {
         Some(Row::Overview) => {
             let review = &bundle.review;
+            if app.product && !review.plain.trim().is_empty() {
+                paragraph(&mut rows, &review.plain, width, "", plain, None);
+                section(&mut rows, "In detail".into());
+            }
             paragraph(&mut rows, &review.summary, width, "", plain, None);
             if let Some(map) = &review.map {
                 section(&mut rows, "Where it sits".into());
@@ -471,6 +475,10 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
         rows.push((Line::from(line), None));
     }
     paragraph(&mut rows, "", width, "", plain, None);
+    if app.product && !item.plain.trim().is_empty() {
+        paragraph(&mut rows, &item.plain, width, "", plain, None);
+        section(&mut rows, "In detail".into());
+    }
     body(&mut rows, &item.body, width);
     let notes: Vec<_> = app.state.notes.iter().filter(|note| note.item.as_ref() == Some(&item.id)).collect();
     if !notes.is_empty() {

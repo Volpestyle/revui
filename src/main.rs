@@ -1536,6 +1536,11 @@ fn picker() -> Picker {
     if picker.protocol_type() == ProtocolType::Halfblocks && speaks_kitty && !opted_out {
         picker.set_protocol_type(ProtocolType::Kitty);
     }
+    // A terminal that answers for both Kitty and Sixel is xterm.js (the terminal of VS Code and Cursor). It draws a Kitty
+    // image placed directly, but not the placeholder cells pictures are drawn with here, which come out as boxes.
+    if picker.protocol_type() == ProtocolType::Kitty && !speaks_kitty && picker.capabilities().contains(&ratatui_image::picker::Capability::Sixel) {
+        picker.set_protocol_type(ProtocolType::Sixel);
+    }
     picker.set_background_color(Some([0, 0, 0, 0]));
     picker
 }

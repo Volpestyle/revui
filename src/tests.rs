@@ -618,3 +618,30 @@ fn the_host_decides_where_an_agent_opens() {
     assert_eq!(names(Host::Cursor, 240)[0], "agent", "a chat that cannot take a follow-up is offered, not the default");
     assert!(presets(Host::Tmux, 240).iter().take(2).all(|agent| !agent.modal && agent.send.is_some()), "a pane takes follow-ups");
 }
+
+#[test]
+fn a_product_reader_gets_the_finding_in_product_terms_first() {
+    let root = std::env::temp_dir().join(format!("revui-product-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("mr.patch"), "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-x\n+y\n").unwrap();
+    let guide = r#"{"title": "t", "summary": "Wraps the POST in a retry.", "plain": "Checkout survives a short outage.",
+        "sources": [{"id": "mr", "head_sha": "a", "patch": "mr.patch"}], "sections": [{"title": "s", "why": "w", "hunks": [{"file": "a.ts"}]}],
+        "items": [{"id": "B1", "kind": "finding", "severity": "blocker", "section": 0, "title": "A retry can create the order twice",
+            "body": "The POST carries no idempotency key.", "plain": "A customer can be charged twice for one checkout."}]}"#;
+    std::fs::write(root.join("review.json"), guide).unwrap();
+    let screen = |product: bool, card: usize| {
+        let mut app = App::new(Bundle::load(&root).unwrap(), Picker::halfblocks());
+        (app.panes, app.product, app.hide_diff) = (Panes::default(), product, product);
+        (0..card).for_each(|_| app.card(1));
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        format!("{}", terminal.backend())
+    };
+    let (summary, finding) = (screen(true, 0), screen(true, 2));
+    assert!(summary.find("Checkout survives").unwrap() < summary.find("Wraps the POST").unwrap(), "{summary}");
+    assert!(finding.find("charged twice").unwrap() < finding.find("idempotency key").unwrap() && finding.contains("In detail") && !finding.contains("@@ -1 +1 @@"), "{finding}");
+    let engineer = screen(false, 2);
+    assert!(!engineer.contains("charged twice") && engineer.contains("idempotency key") && engineer.contains("@@ -1 +1 @@"), "today's view is unchanged: {engineer}");
+    let _ = std::fs::remove_dir_all(&root);
+}

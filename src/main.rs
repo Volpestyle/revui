@@ -245,6 +245,8 @@ struct App {
     picture_area: Rect,
     open_at: Option<(usize, u32)>,
     hide_diff: bool,
+    /// The config's `audience` is `product`: cards lead with the product terms the guide gives.
+    product: bool,
     palette: Option<(String, usize)>,
     palette_cursor: usize,
     pending: Option<KeyCode>,
@@ -333,7 +335,8 @@ impl App {
             help: false,
             picture_area: Rect::default(),
             open_at: None,
-            hide_diff: false,
+            hide_diff: mrs::product_view(),
+            product: mrs::product_view(),
             palette: None,
             palette_cursor: 0,
             pending: None,

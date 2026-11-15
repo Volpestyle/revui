@@ -19,6 +19,7 @@ struct Config {
     claude: Option<String>,
     drive: Option<String>,
     accent: Option<String>,
+    audience: Option<String>,
     open: Option<String>,
     open_more: Option<String>,
     #[serde(default)]
@@ -206,6 +207,11 @@ pub fn generate_command() -> String {
 
 pub fn apply_accent() {
     crate::set_accent(&config().accent.unwrap_or_default());
+}
+
+/// The reader does not read code: lead with what a finding means for the product, and keep the diff out of the way.
+pub fn product_view() -> bool {
+    config().audience.is_some_and(|audience| audience.trim().eq_ignore_ascii_case("product"))
 }
 
 pub fn drive() -> String {

@@ -2,13 +2,15 @@ mod bundle;
 mod draw;
 mod input;
 mod mrs;
+mod shared;
 mod tabs;
 mod term;
 mod video;
 #[cfg(test)]
 mod tests;
 
-use bundle::{Bundle, Finished, Item, Kind, Note, State};
+use bundle::{Bundle, Item, Kind, Note, State};
+use shared::{Mode, Point, FINISH};
 use draw::{accent, clear_popup, detail, draw, draw_help, draw_palette, editor_area, footer, hunk_lines, popup_selection, rich, scrollbar, set_accent, spinner, wrap_code};
 use input::{edit, palette_key, Command, COMMANDS};
 use tabs::{Tab, Tabs};
@@ -121,14 +123,6 @@ pub fn uuid() -> String {
     format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..])
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Mode {
-    Ask,
-    Verify,
-    Artifact,
-    Guide,
-}
-
 #[derive(Clone, Copy)]
 enum Target {
     Reuse(usize),
@@ -139,8 +133,6 @@ const SKILL: &str = include_str!("../skill/SKILL.md");
 const DRIVE: &str = include_str!("../skill/DRIVE.md");
 const GUIDE: &str = include_str!("../skill/GUIDE.md");
 const SETUP: &str = include_str!("../SETUP.md");
-/// Where a run happens is the person's choice per repo, kept in the repo's notes: the agent asks once, the first time it matters.
-const WHERE: &str = "Run it off my screen, where `revui drive` says this repo's evidence comes from. Not asked yet: ask me first.";
 pub const SETUP_PROMPT: &str = "Set up revui for me on this machine. Run: revui setup --guide and follow what it prints.";
 
 #[derive(Clone, Copy, Default)]
@@ -167,24 +159,6 @@ enum Finish {
     Menu(usize),
     Preview(usize, String),
 }
-
-struct Point {
-    heading: String,
-    text: String,
-    file: Option<String>,
-    line: Option<u32>,
-    start: Option<u32>,
-    old: bool,
-    reply_to: Option<String>,
-    item: Option<String>,
-}
-
-const FINISH: [&str; 4] = [
-    "Publish as one comment on the merge request",
-    "Publish as one comment, and approve",
-    "Publish each point as its own thread on the diff",
-    "Copy the text instead, and post nothing",
-];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Row {
@@ -367,27 +341,15 @@ impl App {
     }
 
     fn fetch_threads(&mut self) {
-        let Some(source) = self.bundle.review.sources.first().filter(|s| !s.repo.is_empty() && !s.reference.is_empty()) else { return };
-        let (repo, reference) = (source.repo.clone(), source.reference.clone());
-        let cache = self.bundle.dir.join("threads.json");
+        let Some(fetch) = shared::threads(&self.bundle) else { return };
         if self.threads.is_empty() && self.dates.is_none() {
-            let saved = std::fs::read_to_string(&cache).ok().and_then(|text| serde_json::from_str(&text).ok());
-            if let Some((threads, dates)) = saved {
+            if let Some((threads, dates)) = shared::cached_threads(&self.bundle) {
                 (self.threads, self.dates) = (threads, dates);
                 self.rebuild_rows();
             }
         }
         let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let fetched = std::thread::scope(|scope| {
-                let dates = scope.spawn(|| mrs::dates(&repo, &reference));
-                (mrs::threads(&repo, &reference), dates.join().ok().flatten())
-            });
-            if !cfg!(test) {
-                let _ = std::fs::write(cache, serde_json::to_string(&fetched).unwrap_or_default());
-            }
-            sender.send(fetched)
-        });
+        std::thread::spawn(move || sender.send(fetch()));
         self.threads_rx = Some(receiver);
     }
 
@@ -508,16 +470,9 @@ impl App {
         self.rebuild_rows();
     }
 
-    /// An item that goes out on its own when you publish: a finding you agreed with, a decision you pushed back on.
-    fn raised(&self, item: &Item) -> bool {
-        let verdict = self.state.verdicts.get(&item.id).map(String::as_str);
-        matches!((item.kind, verdict), (Kind::Finding, Some("agree")) | (Kind::Decision, Some("dismiss")))
-    }
-
     /// Whether an item's text goes out as a quote above your comments on it. Unless you chose, raised items are quoted and the rest are not.
     pub(crate) fn quoted(&self, id: &str) -> bool {
-        let raised = || self.bundle.review.items.iter().any(|item| item.id == id && self.raised(item));
-        self.state.quotes.get(id).copied().unwrap_or_else(raised)
+        shared::quoted(&self.bundle, &self.state, id)
     }
 
     /// The quote choice a comment popup offers: none for a reply or a comment that is not on an item.
@@ -526,63 +481,11 @@ impl App {
     }
 
     fn points(&self) -> Vec<Point> {
-        let mut points = Vec::new();
-        for item in &self.bundle.review.items {
-            let notes: Vec<&Note> = self.state.notes.iter().filter(|note| !note.posted && note.item.as_ref() == Some(&item.id)).collect();
-            let quote = self.quoted(&item.id);
-            if (quote || !notes.is_empty()) && !self.state.published.contains(&item.id) {
-                let (file, line) = item.at.as_ref().map_or((None, None), |at| (Some(at.file.clone()), Some(at.line)));
-                let mut parts = Vec::new();
-                if quote {
-                    let quoted = item.body.trim().lines().map(|line| match line.strip_prefix("# ") {
-                        Some(label) => format!("> **{label}**"),
-                        None => format!("> {line}").trim_end().to_string(),
-                    });
-                    parts.push(format!("> **{}**\n>\n{}", item.title, quoted.collect::<Vec<_>>().join("\n")));
-                }
-                parts.extend(notes.iter().map(|note| note.text.clone()));
-                let text = parts.join("\n\n");
-                points.push(Point { heading: String::new(), text, file, line, start: None, old: false, reply_to: None, item: Some(item.id.clone()) });
-            }
-        }
-        let raised: Vec<&String> = points.iter().filter_map(|point| point.item.as_ref()).collect();
-        let mut loose = Vec::new();
-        for note in self.state.notes.iter().filter(|note| !note.posted && !note.item.as_ref().is_some_and(|id| raised.contains(&id))) {
-            let heading = note.item.as_ref().filter(|_| note.file.is_none()).map_or(String::new(), |id| format!("On {id}"));
-            loose.push(Point { heading, text: note.text.clone(), file: note.file.clone(), line: note.line, start: note.start, old: note.old, reply_to: note.reply_to.clone(), item: None });
-        }
-        points.extend(loose);
-        points
+        shared::points(&self.bundle, &self.state)
     }
 
     fn compose(&self, points: &[&Point]) -> String {
-        let source = self.bundle.review.sources.first();
-        let (url, head) = source.map_or(("", ""), |s| (s.url.as_str(), s.head_sha.as_str()));
-        let mut body = format!("Reviewed at `{head:.8}`.");
-        if points.is_empty() {
-            return body + " No comments.";
-        }
-        for point in points {
-            let place = match (&point.file, point.line) {
-                (Some(file), Some(line)) => {
-                    let lines = point.start.map_or(line.to_string(), |start| format!("{start}-{line}"));
-                    match mrs::file_url(url, head, file, point.start.unwrap_or(line)).filter(|_| !point.old) {
-                        Some(link) => format!("[`{file}:{lines}`]({link})"),
-                        None => format!("`{file}:{lines}`"),
-                    }
-                }
-                _ => String::new(),
-            };
-            let lead = match (point.heading.is_empty(), place.is_empty()) {
-                (true, true) => String::new(),
-                (true, false) if point.text.starts_with("> ") => format!("{place}\n  "),
-                (true, false) => format!("{place}: "),
-                (false, true) => format!("**{}**\n  ", point.heading),
-                (false, false) => format!("**{}** ({place})\n  ", point.heading),
-            };
-            body += &format!("\n\n- {lead}{}", point.text.trim().replace('\n', "\n  "));
-        }
-        body
+        shared::compose(&self.bundle, points)
     }
 
     fn item(&self) -> Option<&Item> {
@@ -869,10 +772,6 @@ impl App {
         let (url, sha, repo) = source.map_or(("", "", ""), |s| (s.url.as_str(), s.head_sha.as_str(), s.repo.as_str()));
         let file_url = mrs::file_url(url, sha, file, line).unwrap_or_default();
         let dir = self.bundle.dir.to_string_lossy();
-        let looking_at = match self.item() {
-            Some(item) => format!("{} \"{}\" ({file}:{line})", item.id, item.title),
-            None => format!("{file}:{line}"),
-        };
         let section = self.group().and_then(|g| self.bundle.review.sections.get(g));
         let picked: Vec<String> = self
             .checked
@@ -891,26 +790,7 @@ impl App {
             .into_iter()
             .map(|(_, text)| text)
             .collect();
-        let target = match (self.item(), section) {
-            _ if !picked.is_empty() => format!("these claims: {}", picked.join("; ")),
-            (Some(item), _) => format!("{} \"{}\"", item.id, item.title),
-            (None, Some(section)) => format!("every finding in the section \"{}\" that has no observed evidence", section.title),
-            _ => "every finding that has no observed evidence".into(),
-        };
-        let guide = format!("the revui guide at {dir} (run `revui skill` first)");
-        let prompt = match (mode, fresh) {
-            // A guide for an earlier head is updated into the bundle of the current one, which `revui fetch` already made.
-            (Mode::Guide, _) => {
-                let into = self.bundle.successor.as_ref().unwrap_or(&self.bundle.dir).display().to_string();
-                mrs::guide_prompt(url, &into)
-            }
-            (Mode::Ask, true) => format!("I'm reviewing {url} with {guide}. About {looking_at}: "),
-            (Mode::Ask, false) => format!("About {looking_at}: "),
-            (Mode::Verify, true) => format!("Verify {target} in {guide}. {WHERE}"),
-            (Mode::Verify, false) => format!("Verify {target}. {WHERE}"),
-            (Mode::Artifact, true) => format!("Draw a diagram that makes {target} easy to follow, in {guide}. Run nothing: verifying is a separate ask."),
-            (Mode::Artifact, false) => format!("Draw a diagram that makes {target} easy to follow. Run nothing: verifying is a separate ask."),
-        };
+        let prompt = shared::prompt(&self.bundle, mode, fresh, self.item(), (file, line), section, &picked);
         let (session, session_id) = self.session().map_or((String::new(), String::new()), |s| (s.handle, s.id));
         let first_hunk = place.and_then(|(file, _)| file.hunks.first()).map_or("", |hunk| hunk.header.as_str());
         let (added, deleted) = (first_hunk.starts_with("@@ -0,0 "), first_hunk.contains(" +0,0 @@"));
@@ -1228,77 +1108,20 @@ fn open_file(terminal: &mut DefaultTerminal, app: &mut App, wait_for_editor: boo
 }
 
 fn post(terminal: &mut DefaultTerminal, app: &mut App, choice: usize, body: String) -> std::io::Result<()> {
-    let Some(source) = app.bundle.review.sources.first().filter(|s| !s.repo.is_empty() && !s.reference.is_empty()) else {
-        app.note = "This bundle does not name a merge request to post to.".into();
-        return Ok(());
+    let work = match shared::posting(&app.bundle, &app.state, choice, body) {
+        Ok(work) => work,
+        Err(problem) => {
+            app.note = problem;
+            return Ok(());
+        }
     };
-    let (repo, reference, head) = (source.repo.clone(), source.reference.clone(), source.head_sha.clone());
-    let points = app.points();
-    let raised_items: Vec<String> = points.iter().filter_map(|point| point.item.clone()).collect();
-    let leftover_body = |app: &App, kept: &[&Point]| app.compose(kept);
-    let general: Vec<&Point> = points.iter().filter(|p| p.reply_to.is_none() && (p.file.is_none() || p.line.is_none())).collect();
-    let placed: Vec<&Point> = points.iter().filter(|p| p.reply_to.is_none() && p.file.is_some() && p.line.is_some()).collect();
-    let general_body = (!general.is_empty()).then(|| leftover_body(app, &general));
-    let jobs: Vec<(Option<String>, Option<(String, u32, bool, Option<u32>)>, String)> = points
-        .iter()
-        .map(|p| {
-            let text = if p.heading.is_empty() { p.text.clone() } else { format!("**{}**\n\n{}", p.heading, p.text) };
-            (p.reply_to.clone(), p.file.clone().zip(p.line).map(|(f, l)| (f, l, p.old, p.start)), text)
-        })
-        .collect();
-    let threads_wanted = choice == 2 && !placed.is_empty();
     app.busy = Some("Posting to the merge request".into());
-    let work = move || {
-        let mut problems = Vec::new();
-        let mut failed_inline = Vec::new();
-        for (reply_to, place, text) in &jobs {
-            let result = match (reply_to, place, threads_wanted) {
-                (Some(thread), _, _) => mrs::post_reply(&repo, &reference, thread, text),
-                (None, Some((file, line, old, start)), true) => {
-                    let posted = mrs::post_on_line(&repo, &reference, &head, file, *start, *line, *old, text);
-                    if posted.is_err() {
-                        failed_inline.push(format!("- `{file}:{line}`: {}", text.replace('\n', "\n  ")));
-                    }
-                    Ok(())
-                }
-                _ => Ok(()),
-            };
-            if let Err(e) = result {
-                problems.push(e);
-            }
-        }
-        let note = match threads_wanted {
-            false => Some(body),
-            true => {
-                let mut summary = general_body.unwrap_or_default();
-                if !failed_inline.is_empty() {
-                    summary += &format!("\n\nThese could not be placed on the diff:\n\n{}", failed_inline.join("\n"));
-                }
-                (!summary.trim().is_empty()).then_some(summary)
-            }
-        };
-        if let Some(Err(e)) = note.map(|text| mrs::post_note(&repo, &reference, &text)) {
-            problems.push(e);
-        }
-        if choice == 1 {
-            if let Err(e) = mrs::approve(&repo, &reference) {
-                problems.push(format!("approve: {e}"));
-            }
-        }
-        problems
-    };
     let problems = wait(terminal, |frame| draw(app, frame), work)?;
     app.busy = None;
     match problems.first() {
         Some(problem) => app.note = format!("Posting hit {} problems, check the merge request before retrying: {problem}", problems.len()),
         None => {
-            for note in &mut app.state.notes {
-                note.posted = true;
-            }
-            app.state.published.extend(raised_items);
-            let how = ["published as one comment", "published and approved", "published as threads"][choice.min(2)];
-            app.state.finished = Some(Finished { how: how.into(), posted: true });
-            let _ = app.bundle.save_state(&app.state);
+            shared::mark_published(&app.bundle, &mut app.state, choice);
             app.note = "Published to the merge request.".into();
             app.fetch_threads();
             app.rebuild_rows();
@@ -1991,6 +1814,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(if failed { 1 } else { 0 });
         }
         (Some("hunks"), Some(dir)) => return Ok(print!("{}", Bundle::load(Path::new(dir))?.hunks())),
+        (Some("web"), Some(_)) => {
+            let server = Path::new(env!("CARGO_MANIFEST_DIR")).join("web/server/main.ts");
+            if !server.exists() {
+                return Err(format!("revui web runs from a checkout of revui, and {} is gone. Build revui from the checkout you keep: cargo install --path .", server.display()).into());
+            }
+            let ran = std::process::Command::new("node").arg(server).args(&args[1..]).env("REVUI_BIN", std::env::current_exe()?).status();
+            std::process::exit(ran.map_err(|e| format!("node: {e}"))?.code().unwrap_or(1));
+        }
+        (Some("json"), Some(dir)) => return Ok(println!("{}", shared::json(&Bundle::load(Path::new(dir))?))),
+        (Some("state"), Some(dir)) => {
+            let state: State = serde_json::from_reader(std::io::stdin()).map_err(|e| format!("state: {e}"))?;
+            return Ok(Bundle::load(Path::new(dir))?.save_state(&state)?);
+        }
+        (Some("threads"), Some(dir)) => {
+            let bundle = Bundle::load(Path::new(dir))?;
+            let fetched = shared::threads(&bundle).map(|fetch| fetch()).unwrap_or_default();
+            return Ok(println!("{}", serde_json::to_string(&fetched)?));
+        }
+        (Some(what @ ("prompt" | "agent")), Some(dir)) => {
+            let bundle = Bundle::load(Path::new(dir))?;
+            let mode = match args.get(2).map(String::as_str) {
+                Some("ask") => Mode::Ask,
+                Some("verify") => Mode::Verify,
+                Some("artifact") => Mode::Artifact,
+                Some("guide") => Mode::Guide,
+                _ => return Err("usage: revui prompt <dir> ask|verify|artifact|guide [item id | part number] [--fresh]".into()),
+            };
+            let on = args.get(3).filter(|on| !on.starts_with("--"));
+            let item = on.and_then(|id| bundle.review.items.iter().find(|item| item.id == *id));
+            let part = on.and_then(|part| part.parse::<usize>().ok()).and_then(|part| part.checked_sub(1)).or(item.and_then(|item| item.section));
+            let first = part.and_then(|part| bundle.groups.get(part)?.first()).map(|&(file, hunk)| (bundle.files[file].path.as_str(), bundle.files[file].hunks[hunk].new_start.max(1)));
+            let place = item.and_then(|item| item.at.as_ref()).map(|at| (at.file.as_str(), at.line)).or(first).unwrap_or(("", 0));
+            let section = part.and_then(|part| bundle.review.sections.get(part));
+            let prompt = |fresh| shared::prompt(&bundle, mode, fresh, item, place, section, &[]);
+            if what == "prompt" {
+                return Ok(println!("{}", prompt(args.iter().any(|arg| arg == "--fresh"))));
+            }
+            let agent = mrs::agents().into_iter().find(|agent| !agent.modal).ok_or("No pane to open an agent in: start revui web inside tmux, Herdr, Orca or Cursor, or name an agent with a pane of its own under \"agents\" in the config.")?;
+            let file = bundle.dir.join("session.json");
+            let saved = std::fs::read_to_string(&file).ok().and_then(|saved| serde_json::from_str::<Session>(&saved).ok()).filter(|saved| saved.agent == agent.name && !saved.handle.is_empty());
+            // ponytail: an agent's script gets the prompt, the session and the review here, not the file and line the terminal viewer adds
+            let run = |script: &str, fresh: bool, handle: &str| {
+                let prompt = prompt(fresh);
+                let source = bundle.review.sources.first();
+                std::process::Command::new("sh")
+                    .args(["-c", script])
+                    .env("REVUI_CLAUDE", mrs::claude())
+                    .env("REVUI_DIR", &bundle.dir)
+                    .env("REVUI_URL", source.map_or("", |s| s.url.as_str()))
+                    .env("REVUI_ITEM", item.map_or("", |item| item.id.as_str()))
+                    .env("REVUI_SESSION", handle)
+                    .env("REVUI_PROMPT_URI", url_encode(&prompt))
+                    .env("REVUI_PROMPT", prompt)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+            };
+            if let (Some(send), Some(saved)) = (&agent.send, &saved) {
+                if run(send, false, &saved.handle).is_ok_and(|sent| sent.status.success()) {
+                    return Ok(println!("Sent to the agent in the {}.", agent.name));
+                }
+            }
+            let ran = run(&agent.run, true, "")?;
+            if !ran.status.success() {
+                let said = String::from_utf8_lossy(&ran.stderr).into_owned() + &String::from_utf8_lossy(&ran.stdout);
+                return Err(format!("Could not start an agent in a {}: {}", agent.name, said.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("no output").trim()).into());
+            }
+            let session = Session { agent: agent.name.clone(), handle: String::from_utf8_lossy(&ran.stdout).trim().to_string(), id: String::new(), cwd: String::new() };
+            std::fs::write(file, serde_json::to_string(&session)?)?;
+            return Ok(println!("Started an agent in a {}.", agent.name));
+        }
+        (Some("publish"), Some(dir)) => {
+            let bundle = Bundle::load(Path::new(dir))?;
+            let choice = args.get(2).and_then(|choice| choice.parse::<usize>().ok()).filter(|choice| (1..=3).contains(choice)).ok_or("usage: revui publish <dir> 1|2|3 < the text to post")? - 1;
+            let mut state = bundle.load_state();
+            let body = std::io::read_to_string(std::io::stdin())?;
+            let problems = shared::posting(&bundle, &state, choice, body)?();
+            if problems.is_empty() {
+                shared::mark_published(&bundle, &mut state, choice);
+            }
+            problems.iter().for_each(|problem| eprintln!("{problem}"));
+            std::process::exit(if problems.is_empty() { 0 } else { 1 });
+        }
         (Some("check"), Some(dir)) => {
             let (ok, report) = Bundle::load(Path::new(dir))?.check();
             print!("{report}");
@@ -2045,6 +1950,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui queue             list the merge requests waiting for your review, and make their bundles\n\
                  revui prepare [mr url]  write the guides those are missing, or that one's, with no one watching\n\
                  revui hunks <dir>       list the diff's files and hunk indexes\n\
+                 revui web <dir | mr url> [--no-agent]   the same review in a browser, with the agent as a chat unless --no-agent (needs node, and a checkout of revui)\n\
+                 revui json <dir>        print the review, its diff, your marks and what would go out, for another front end\n\
+                 revui state <dir>       save your marks, read as JSON from stdin\n\
+                 revui threads <dir>     ask the host what is already said on the merge request\n\
+                 revui prompt <dir> ask|verify|artifact|guide [item id | part number] [--fresh]   what an agent is told\n\
+                 revui agent <dir> ask|verify|artifact|guide [item id | part number]   tell it to an agent in a pane of tmux, Herdr, Orca or Cursor\n\
+                 revui publish <dir> 1|2|3   post the text on stdin: one comment, one comment and approve, or threads\n\
                  revui check <dir>       validate a bundle, exit 1 on problems\n\
                  revui shot <url|file> <out.png> [WxH]   screenshot a page in headless Chrome\n\
                  revui diagram <file.mmd> <out.png>      render a Mermaid diagram to an image\n\

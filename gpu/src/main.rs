@@ -314,10 +314,14 @@ impl Open {
         #[cfg(target_arch = "wasm32")]
         return known.or(Some(String::new()));
         #[cfg(not(target_arch = "wasm32"))]
-        known.or_else(|| revui(&["checkout", &self.dir], None).ok()).or_else(|| {
-            let root = rfd::FileDialog::new().set_title("Where do you keep your code? Pick the folder your checkouts are under: revui finds each repo there.").pick_folder()?;
-            revui(&["checkout", &self.dir, &root.to_string_lossy()], None).ok()
-        }).map(|found| found.trim().to_string())
+        known.or_else(|| revui(&["checkout", &self.dir], None).ok()).or_else(|| self.root()).map(|found| found.trim().to_string())
+    }
+
+    /// Asks where the person keeps their code, has revui remember it, and gives back where this review's repo is under it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn root(&self) -> Option<String> {
+        let root = rfd::FileDialog::new().set_title("Where do you keep your code? Pick the folder your checkouts are under: revui finds each repo there.").pick_folder()?;
+        revui(&["checkout", &self.dir, &root.to_string_lossy()], None).ok()
     }
 
     /// Tells the agent: a question typed in ask mode, or the verify or artifact request for the card shown.
@@ -859,15 +863,15 @@ impl eframe::App for App {
         if ctx.input(|input| input.modifiers.command && !input.modifiers.shift && input.key_pressed(Key::J)) {
             (open.agent, open.minimized) = (!open.agent || open.minimized, false);
         }
-        if pressed(Key::V) && !shift {
-            open.agent = true;
-            open.tell(&ctx, "verify", "");
-        }
         if chord(Key::M) && open.agent {
             open.minimized ^= true;
         }
         if chord(Key::D) {
             (open.agent, open.minimized, open.floating) = (true, false, !open.floating || !open.agent || open.minimized);
+        }
+        if pressed(Key::V) && !shift {
+            open.agent = true;
+            open.tell(&ctx, "verify", "");
         }
         if pressed(Key::I) {
             open.agent = true;
@@ -881,6 +885,7 @@ impl eframe::App for App {
         }
         let mut marked: Option<(String, &str)> = None;
         let mut home = false;
+        let (mut mapping, mut rooting, mut rootless) = (false, false, false);
         if let Card::Item(n) = open.cards[open.at] {
             let id = open.data.review.items[n].id.clone();
             match (pressed(Key::A), pressed(Key::X)) {
@@ -1060,51 +1065,101 @@ impl eframe::App for App {
                             ui.separator();
                             ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
                             ui.add_space(6.0);
-                            let own = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| host::text(&open.dir, &std::path::Path::new(path).with_extension("mmd").to_string_lossy()));
-                            let (source, touched) = match (&own, &open.data.system) {
-                                (Some(text), _) => (text.as_str(), None),
-                                (None, Some(system)) => (system.text.as_str(), Some(&system.touched)),
-                                _ => ("", None),
-                            };
-                            let (mut nodes, edges) = map::parse(source);
-                            if let Some(touched) = touched {
-                                nodes.iter_mut().for_each(|node| node.state = touched.contains_key(&node.id).then_some("changed"));
+                            let drawn = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| host::text(&open.dir, &std::path::Path::new(path).with_extension("mmd").to_string_lossy()));
+                            let sights: Vec<&'static str> = [review.map.is_some().then_some("This change"), open.data.system.is_some().then_some("Whole system"), Some("Folders")].into_iter().flatten().collect();
+                            let kept = egui::Id::new("map shows");
+                            let (mut sight, mut calls, mut named) = ui.data(|data| data.get_temp::<(&'static str, bool, Option<bool>)>(kept)).unwrap_or((sights[0], true, None));
+                            if !sights.contains(&sight) {
+                                sight = sights[0];
                             }
-                            let caption = match (&review.map, touched) {
-                                (Some(map), None) => map.caption.clone(),
-                                _ => {
-                                    let hit: Vec<&str> = nodes.iter().filter(|node| node.state.is_some()).map(|node| node.label.as_str()).collect();
-                                    format!("Touches {} of {} parts of the system: {}", hit.len(), nodes.len(), hit.join(", "))
+                            let changed: Vec<&str> = open.data.files.iter().map(|file| file.path.as_str()).collect();
+                            let (mut edges, mut text) = (Vec::new(), String::new());
+                            let (mut nodes, caption);
+                            match (sight, &review.map, &open.data.system) {
+                                ("This change", Some(map), _) => {
+                                    (nodes, edges) = map::parse(drawn.as_deref().unwrap_or(""));
+                                    caption = map.caption.clone();
+                                    text = map.text.clone().unwrap_or_default();
                                 }
-                            };
+                                ("Whole system", _, Some(system)) => {
+                                    (nodes, edges) = map::parse(&system.text);
+                                    nodes.iter_mut().for_each(|node| node.state = system.touched.contains_key(&node.id).then_some("changed"));
+                                    let hit: Vec<&str> = nodes.iter().filter(|node| node.state.is_some()).map(|node| node.label.as_str()).collect();
+                                    caption = format!("Touches {} of {} parts of the system: {}", hit.len(), nodes.len(), hit.join(", "));
+                                }
+                                _ => {
+                                    // ponytail: the repo's folders are asked for once a run; a checkout that appears later shows after the review is opened again.
+                                    let asked = egui::Id::new(("tree", &open.dir));
+                                    let tree = ui.data(|data| data.get_temp::<Result<std::sync::Arc<std::collections::BTreeMap<String, usize>>, String>>(asked)).unwrap_or_else(|| {
+                                        let read = revui(&["tree", &open.dir], None).and_then(|listed| serde_json::from_str(&listed).map(std::sync::Arc::new).map_err(|e| e.to_string()));
+                                        ui.data_mut(|data| data.insert_temp(asked, read.clone()));
+                                        read
+                                    });
+                                    match tree {
+                                        Ok(tree) => {
+                                            let more;
+                                            (nodes, more) = map::folders(&tree, &changed);
+                                            caption = format!("The repo's folders, each as tall as it is full. This change touches the {} lit{}.", nodes.iter().filter(|node| node.state.is_some()).count(), if more == 0 { String::new() } else { format!(" ({more} smaller folders are left out)") });
+                                        }
+                                        Err(why) => {
+                                            let paths: Vec<Vec<&str>> = changed.iter().map(|path| path.split('/').collect()).collect();
+                                            let shared = (0..).take_while(|&n| !paths.is_empty() && paths.iter().all(|parts| parts.len() > n + 1 && parts[n] == paths[0][n])).count();
+                                            let mut places: std::collections::BTreeMap<&str, usize> = Default::default();
+                                            for (file, parts) in open.data.files.iter().zip(&paths) {
+                                                *places.entry(parts[shared]).or_default() += file.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(['+', '-'])).count();
+                                            }
+                                            nodes = places.iter().map(|(name, lines)| map::Node { id: name.to_string(), label: name.to_string(), form: map::Form::Block, state: Some("changed"), tall: 10.0 + 9.0 * (1.0 + *lines as f32).ln(), note: format!("{lines} lines changed") }).collect();
+                                            nodes.sort_by_key(|node| std::cmp::Reverse(places[node.id.as_str()]));
+                                            nodes.truncate(36);
+                                            caption = format!("Only where this change lands{}, each as tall as its lines changed.", if shared == 0 { String::new() } else { format!(" in {}", paths[0][..shared].join("/")) });
+                                            rootless = why.contains("not known yet");
+                                            text = if rootless { "To see the rest of the repo around it, tell revui where your code is kept.".into() } else { format!("The rest of the repo is not shown: {}.", why.trim().trim_start_matches("Error: ").trim_matches('"')) };
+                                        }
+                                    }
+                                }
+                            }
+                            let labels = named.unwrap_or(nodes.len() <= 14);
                             egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.line)).inner_margin(14.0).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    for name in sights.iter().filter(|_| sights.len() > 1) {
+                                        if button(ui, &tones, name, sight == *name).clicked() {
+                                            sight = name;
+                                        }
+                                    }
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if button(ui, &tones, &icon(Icon::Tag, "Names"), labels).on_hover_text("Name every block, or only the lit ones and the one under the pointer").clicked() {
+                                            named = Some(!labels);
+                                        }
+                                        if !edges.is_empty() {
+                                            calls ^= button(ui, &tones, &icon(Icon::Waypoints, "Calls"), calls).on_hover_text("Who calls whom").clicked();
+                                        }
+                                    });
+                                });
                                 let look = map::Look { raised: tones.raised, top: tones.line.gamma_multiply(0.8), side: tones.line, edge: tones.dim, text: tones.strong };
-                                if nodes.len() >= 2 {
-                                    map::draw(ui, &look, &nodes, &edges);
-                                    ui.label(RichText::new(caption).font(bold(13.5)).color(tones.strong));
-                                    if let Some(text) = review.map.as_ref().and_then(|map| map.text.as_ref()).filter(|_| touched.is_none()) {
-                                        ui.label(RichText::new(text).size(13.0).color(tones.text));
-                                    }
-                                } else if let Some(path) = review.map.as_ref().and_then(|map| map.path.as_ref()) {
-                                    artifact(ui, &open.dir, path);
-                                } else {
-                                    let paths: Vec<Vec<&str>> = open.data.files.iter().map(|file| file.path.split('/').collect()).collect();
-                                    let shared = (0..).take_while(|&n| !paths.is_empty() && paths.iter().all(|parts| parts.len() > n + 1 && parts[n] == paths[0][n])).count();
-                                    let mut places: std::collections::BTreeMap<&str, usize> = Default::default();
-                                    for (file, parts) in open.data.files.iter().zip(&paths) {
-                                        *places.entry(parts[shared]).or_default() += file.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(['+', '-'])).count();
-                                    }
-                                    let mut landed: Vec<map::Node> = places.iter().map(|(name, lines)| map::Node { id: name.to_string(), label: format!("{name} · {lines}"), form: map::Form::Block, state: Some("changed") }).collect();
-                                    landed.sort_by_key(|node| std::cmp::Reverse(places[node.id.as_str()]));
-                                    let more = landed.len().saturating_sub(8);
-                                    landed.truncate(8);
-                                    map::draw(ui, &look, &landed, &[]);
-                                    let inside = if shared == 0 { String::new() } else { format!(" in {}", paths[0][..shared].join("/")) };
-                                    let rest = if more == 0 { String::new() } else { format!(", and {more} more places") };
-                                    ui.label(RichText::new(format!("Where the change lands{inside}, by lines changed{rest}. There is no map of this system yet: ask the agent to draw one, and every review of this repo starts from it.")).size(13.0).color(tones.dim));
+                                match (nodes.is_empty(), review.map.as_ref().and_then(|map| map.path.as_ref())) {
+                                    (false, _) => map::draw(ui, &look, &nodes, &edges, map::Show { calls, labels }),
+                                    (true, Some(path)) => artifact(ui, &open.dir, path),
+                                    _ => {}
+                                }
+                                ui.label(RichText::new(&caption).font(bold(13.5)).color(tones.strong));
+                                if !text.is_empty() {
+                                    ui.label(RichText::new(&text).size(13.0).color(tones.text));
+                                }
+                                if review.map.is_none() || rootless {
+                                    ui.add_space(6.0);
+                                    ui.horizontal(|ui| {
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        if rootless {
+                                            rooting = button(ui, &tones, &icon(Icon::FolderSearch, "Show the whole repo"), false).clicked();
+                                        }
+                                        if review.map.is_none() {
+                                            mapping = button(ui, &tones, &icon(Icon::Workflow, "Have the agent draw the map"), false).on_hover_text("This review has no map of the system around it yet").clicked();
+                                        }
+                                    });
                                 }
                             });
+                            ui.data_mut(|data| data.insert_temp(kept, (sight, calls, named)));
                             ui.add_space(14.0);
                             ui.label(RichText::new("Read in this order").font(bold(14.0)).color(tones.strong));
                             for (part, section) in review.sections.iter().enumerate() {
@@ -1327,6 +1382,14 @@ impl eframe::App for App {
             if let Some(n) = go.or(enter.then_some(on)) {
                 (open.at, open.contents, open.in_diff, open.line, open.proof) = (n, None, false, 0, 0);
             }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if rooting && open.root().is_some() {
+            ctx.data_mut(|data| data.remove_by_type::<Result<std::sync::Arc<std::collections::BTreeMap<String, usize>>, String>>());
+        }
+        if mapping {
+            open.agent = true;
+            open.tell(&ctx, "ask", "Draw the map for this review, as `revui skill guide` says under \"The map\": the system map of the repo first if `revui map` shows none, then this review's `assets/map.mmd` and `map` in review.json.");
         }
         if let Some((id, verdict)) = marked {
             if let Err(problem) = open.mark(&id, verdict) {

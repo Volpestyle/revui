@@ -1,6 +1,7 @@
 {
   "title": "Retry order submission",
   "summary": "Wraps the order submit call in a three-attempt retry with backoff, so a brief upstream outage no longer fails checkout.",
+  "map": { "provenance": "inferred", "caption": "Order submit now retries the Orders API, waiting between attempts", "path": "assets/map.png", "text": "1. Order submit: a failed POST to the Orders API is sent again, up to three times.\n2. Backoff delay: new, the wait between attempts." },
   "sources": [
     {
       "id": "mr-1",

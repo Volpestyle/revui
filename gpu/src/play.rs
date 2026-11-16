@@ -1,7 +1,7 @@
 //! Plays a script with no one at the keyboard, and can save every frame: how the interface is checked, and how its
 //! demos are recorded without a screen recorder. `REVUI_GPU_KEYS` is the script, entries split by commas:
-//! a key name (`L`, `Tab`, `Enter`, `Cmd+Enter`), `text:…` typed at once, `type:…` typed a letter at a time, `wait:N` frames,
-//! `move:x;y` to glide the drawn cursor, `click`, and for the recording `step:Title|detail`, `focus:x;y;w;h`, `unfocus`.
+//! a key name (`L`, `Tab`, `Enter`, `Cmd+Enter`, `Cmd+Shift+D`), `text:…` typed at once, `type:…` typed a letter at a time, `wait:N` frames,
+//! `move:x;y` to glide the drawn cursor, `click`, `drag:x;y` to hold the button down on the way there, and for the recording `step:Title|detail`, `focus:x;y;w;h`, `unfocus`.
 
 use eframe::egui::{self, Color32, Key, Pos2, Stroke, pos2, vec2};
 
@@ -15,6 +15,7 @@ pub struct Play {
     cursor: Option<Pos2>,
     glide: Option<(Pos2, Pos2, u32, u32)>,
     release: bool,
+    dragging: bool,
     unhold: bool,
     marks: Vec<serde_json::Value>,
 }
@@ -54,8 +55,11 @@ impl Play {
             let k = ((self.frame - start) as f32 / length as f32).min(1.0);
             let eased = k * k * k * (10.0 - 15.0 * k + 6.0 * k * k);
             self.cursor = Some(from + (to - from) * eased);
+            if self.dragging {
+                raw.events.push(egui::Event::PointerMoved(from + (to - from) * eased));
+            }
             if k >= 1.0 {
-                self.glide = None;
+                (self.glide, self.release) = (None, std::mem::take(&mut self.dragging));
             }
         }
         if let (true, Some(at)) = (std::mem::take(&mut self.release), self.cursor) {
@@ -97,6 +101,12 @@ impl Play {
                 self.glide = Some((from, to, self.frame, length));
                 self.hold = length + 3;
                 raw.events.push(egui::Event::PointerMoved(to));
+            }
+            ("drag", [x, y]) => {
+                let (from, to) = (self.cursor.unwrap_or(pos2(680.0, 450.0)), pos2(*x, *y));
+                raw.events.push(egui::Event::PointerMoved(from));
+                raw.events.push(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                (self.glide, self.dragging, self.hold) = (Some((from, to, self.frame, 24)), true, 28);
             }
             ("click", _) => {
                 if let Some(at) = self.cursor {

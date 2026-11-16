@@ -190,11 +190,13 @@ pub fn map_report(bundle: &Path) -> Result<String, String> {
     Ok(format!("System map of {repo} ({}):\n{holds}\n", kept.display()))
 }
 
-/// Where the code of `repo` is under `root`: the folder at that path, else the checkout whose remote is that repo,
-/// else `root` itself, for the agent to find its way from.
-fn checkout_under(root: &Path, repo: &str) -> PathBuf {
-    if !repo.is_empty() && root.join(repo).is_dir() {
-        return root.join(repo);
+/// Where the code of `repo` is under `root`: the folder at that path, else the checkout whose remote is that repo.
+fn checkout_under(root: &Path, repo: &str) -> Option<PathBuf> {
+    if repo.is_empty() {
+        return None;
+    }
+    if root.join(repo).is_dir() {
+        return Some(root.join(repo));
     }
     let wanted = repo.to_lowercase();
     let is_it = |url: &str| url.trim_end_matches('/').trim_end_matches(".git").strip_suffix(&wanted).is_some_and(|before| before.ends_with(['/', ':']));
@@ -208,27 +210,47 @@ fn checkout_under(root: &Path, repo: &str) -> PathBuf {
                 continue;
             }
             match fs::read_to_string(path.join(".git/config")) {
-                Ok(git) if !wanted.is_empty() && git.to_lowercase().lines().filter_map(|line| line.trim().strip_prefix("url = ")).any(is_it) => return path,
+                Ok(git) if git.to_lowercase().lines().filter_map(|line| line.trim().strip_prefix("url = ")).any(is_it) => return Some(path),
                 Ok(_) => {}
                 Err(_) => next.push(path),
             }
         }
         level = next;
     }
-    root.to_path_buf()
+    None
+}
+
+/// The folder the person keeps their code under, and where the repo of a bundle is found beneath it, if it is.
+fn code_of(bundle: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let root = fs::read_to_string(data_dir().join("code")).map(|root| PathBuf::from(root.trim())).ok().filter(|root| root.is_dir());
+    let root = root.ok_or("where your code is kept is not known yet: revui checkout <dir> <the folder your checkouts are under>")?;
+    let repo = Bundle::load(bundle).ok().and_then(|bundle| bundle.review.sources.first().map(|source| source.repo.clone())).unwrap_or_default();
+    let found = checkout_under(&root, &repo);
+    Ok((root, found))
 }
 
 /// `revui checkout <dir> [root]`: the folder that review's agent starts in. The folder your code is kept under is
-/// remembered beside the bundles the first time it is given; each repo is then found under it.
+/// remembered beside the bundles the first time it is given; each repo is then found under it, and when one is not,
+/// the agent starts in that folder to find its own way.
 pub fn checkout(bundle: &Path, root: Option<&str>) -> Result<String, String> {
     let kept = data_dir().join("code");
     if let Some(root) = root {
         fs::create_dir_all(data_dir()).and_then(|_| fs::write(&kept, root)).map_err(|e| format!("{}: {e}", kept.display()))?;
     }
-    let root = fs::read_to_string(&kept).map(|root| PathBuf::from(root.trim())).ok().filter(|root| root.is_dir());
-    let root = root.ok_or("where your code is kept is not known yet: revui checkout <dir> <the folder your checkouts are under>")?;
-    let repo = Bundle::load(bundle).ok().and_then(|bundle| bundle.review.sources.first().map(|source| source.repo.clone())).unwrap_or_default();
-    Ok(checkout_under(&root, &repo).display().to_string())
+    let (root, found) = code_of(bundle)?;
+    Ok(found.unwrap_or(root).display().to_string())
+}
+
+/// `revui tree <dir>`: the folders of that review's repo, two deep, and how many files each holds, as JSON. Read from
+/// the checkout `revui checkout` finds, so there is none without one.
+pub fn tree(bundle: &Path) -> Result<String, String> {
+    let at = code_of(bundle)?.1.ok_or("no checkout of this review's repo was found under the folder your code is kept in")?;
+    let mut folders: std::collections::BTreeMap<String, usize> = Default::default();
+    for file in cli("git", &["-C", &at.to_string_lossy(), "ls-files"])?.lines() {
+        let parts: Vec<&str> = file.split('/').collect();
+        *folders.entry(if parts.len() == 1 { ".".into() } else { parts[..2.min(parts.len() - 1)].join("/") }).or_default() += 1;
+    }
+    Ok(serde_json::json!(folders).to_string())
 }
 
 #[cfg(test)]
@@ -240,10 +262,9 @@ fn a_repo_is_found_under_the_folder_code_is_kept_in() {
     fs::create_dir_all(&plain).unwrap();
     fs::create_dir_all(cloned.join(".git")).unwrap();
     fs::write(cloned.join(".git/config"), "[remote \"origin\"]\n\turl = git@github.com:Shop/Web.git\n").unwrap();
-    assert_eq!(checkout_under(&root, "group/api"), plain);
-    assert_eq!(checkout_under(&root, "shop/web"), cloned);
-    assert_eq!(checkout_under(&root, "op/web"), root);
-    assert_eq!(checkout_under(&root, ""), root);
+    assert_eq!(checkout_under(&root, "group/api"), Some(plain));
+    assert_eq!(checkout_under(&root, "shop/web"), Some(cloned));
+    assert!(checkout_under(&root, "op/web").is_none() && checkout_under(&root, "").is_none());
     let _ = fs::remove_dir_all(&root);
 }
 

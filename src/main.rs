@@ -1929,6 +1929,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some("drive"), dir) => return Ok(print!("{}", mrs::drive_report(dir.map(Path::new)))),
         (Some("map"), Some(dir)) => return Ok(print!("{}", mrs::map_report(Path::new(dir))?)),
         (Some("checkout"), Some(dir)) => return Ok(println!("{}", mrs::checkout(Path::new(dir), args.get(2).map(String::as_str))?)),
+        (Some("tree"), Some(dir)) => return Ok(println!("{}", mrs::tree(Path::new(dir))?)),
         (Some("doctor"), _) => {
             use std::io::IsTerminal;
             let images = match std::io::stdin().is_terminal() {
@@ -1968,6 +1969,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui drive [dir]       what to drive a browser or app with here, and the notes for that bundle's repo\n\
                  revui map <dir>         the system map kept for that bundle's repo, and where it is\n\
                  revui checkout <dir> [root]   the folder that review's agent starts in: its repo, found under the folder your code is kept in (given once)\n\
+                 revui tree <dir>        the folders of that review's repo and how many files each holds, as JSON, read from that checkout\n\
                  revui doctor            check the setup, exit 1 when something needs fixing\n\
                  revui setup             have a coding agent set revui up for you\n\
                  revui setup --guide     print the setup guide that agent follows\n\

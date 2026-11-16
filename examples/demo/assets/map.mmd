@@ -1,0 +1,9 @@
+flowchart LR
+  web[Checkout page] --> submit[Order submit]
+  submit --> api[Orders API]
+  api --> db[(Orders table)]
+  submit -. new .-> sleep[Backoff delay]
+  classDef changed stroke:#e8a33d,stroke-width:3px
+  classDef added stroke:#3fb950,stroke-width:3px
+  class submit changed
+  class sleep added

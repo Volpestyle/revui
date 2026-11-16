@@ -16,6 +16,7 @@ pub struct Play {
     glide: Option<(Pos2, Pos2, u32, u32)>,
     release: bool,
     dragging: bool,
+    lift: Option<(Key, egui::Modifiers)>,
     unhold: bool,
     marks: Vec<serde_json::Value>,
 }
@@ -64,6 +65,9 @@ impl Play {
         }
         if let (true, Some(at)) = (std::mem::take(&mut self.release), self.cursor) {
             raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        }
+        if let Some((key, modifiers)) = self.lift.take() {
+            raw.events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
         }
         if std::mem::take(&mut self.unhold) {
             raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
@@ -127,9 +131,9 @@ impl Play {
                     self.unhold = true;
                 }
                 if let Some(key) = Key::from_name(named) {
-                    for pressed in [true, false] {
-                        raw.events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: held });
-                    }
+                    // The release comes a frame later, as it does from a keyboard.
+                    raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: held });
+                    self.lift = Some((key, held));
                     if let (1, Some(letter), true) = (named.len(), named.chars().next(), held.is_none()) {
                         raw.events.push(egui::Event::Text(letter.to_lowercase().to_string()));
                     }

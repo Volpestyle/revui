@@ -794,9 +794,14 @@ impl eframe::App for App {
         self.play.step(raw);
         // Tab moves between the card and the diff here, as in the terminal, so it never reaches egui's own walk through the widgets.
         if self.open.is_some() {
-            let before = raw.events.len();
-            raw.events.retain(|event| !matches!(event, egui::Event::Key { key: Key::Tab, modifiers, .. } if !modifiers.shift));
-            self.tab |= raw.events.len() != before;
+            // Only the press counts: the release and the repeats of a held key are swallowed too, or one keystroke would move twice.
+            raw.events.retain(|event| match event {
+                egui::Event::Key { key: Key::Tab, modifiers, pressed, repeat, .. } if !modifiers.shift => {
+                    self.tab |= *pressed && !*repeat;
+                    false
+                }
+                _ => true,
+            });
         }
     }
 

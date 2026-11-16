@@ -115,6 +115,7 @@ struct Past {
     done: Option<String>,
     working: String,
     when: String,
+    cwd: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -282,6 +283,14 @@ impl Open {
         }
     }
 
+    /// Where a new agent starts: where another review of the same repo ran its agent, or the folder the person picks.
+    fn folder(&self) -> Option<String> {
+        let all: Vec<Past> = revui(&["list"], None).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        let repo = all.iter().find(|past| past.dir == self.dir).map(|past| past.repo.clone()).unwrap_or_default();
+        let known = all.iter().find(|past| !repo.is_empty() && past.repo == repo && std::path::Path::new(&past.cwd).is_dir() && !past.cwd.is_empty()).map(|past| past.cwd.clone());
+        known.or_else(|| rfd::FileDialog::new().set_title(format!("Where is your checkout of {}? The agent starts there.", if repo.is_empty() { "this code" } else { &repo })).pick_folder().map(|folder| folder.to_string_lossy().into_owned()))
+    }
+
     /// Tells the agent: a question typed in ask mode, or the verify or artifact request for the card shown.
     fn tell(&mut self, ctx: &egui::Context, mode: &str, text: &str) {
         let on = self.on();
@@ -291,8 +300,8 @@ impl Open {
             Ok(prompt) => {
                 let prompt = prompt.trim_end_matches('\n').to_string();
                 let shown = if text.is_empty() { format!("{mode} {}", on.unwrap_or_default()) } else { text.to_string() };
-                let claude = self.data.claude.clone();
-                self.chat.send(ctx, &self.dir.clone(), &claude, format!("{prompt}{text}"), shown);
+                let (claude, Some(folder)) = (self.data.claude.clone(), self.folder()) else { return self.note = "The agent needs the folder of the code under review.".into() };
+                self.chat.send(ctx, &self.dir.clone(), &claude, &folder, format!("{prompt}{text}"), shown);
             }
             Err(problem) => self.note = problem,
         }
@@ -1023,7 +1032,25 @@ impl eframe::App for App {
     }
 }
 
+/// Started from the Dock, an app gets a bare PATH and no revui: take the PATH a login shell builds, and the revui that ships beside this binary.
+fn settle() {
+    let beside = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join("revui"))).filter(|bin| bin.exists());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let asked = Command::new(shell).args(["-ilc", "printf '\\n%s' \"$PATH\""]).stdin(Stdio::null()).stderr(Stdio::null()).output();
+    let path = asked.ok().and_then(|out| String::from_utf8_lossy(&out.stdout).lines().last().map(str::to_string)).filter(|path| path.contains('/'));
+    // SAFETY: nothing else runs yet, so no other thread reads the environment while it changes.
+    unsafe {
+        if let (Some(bin), Err(_)) = (beside, std::env::var("REVUI_BIN")) {
+            std::env::set_var("REVUI_BIN", bin);
+        }
+        if let (Some(path), false) = (path, std::env::var("TERM").is_ok()) {
+            std::env::set_var("PATH", path);
+        }
+    }
+}
+
 fn main() -> eframe::Result {
+    settle();
     let options = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1360.0, 900.0]).with_title("revui"), ..Default::default() };
     eframe::run_native("revui", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }

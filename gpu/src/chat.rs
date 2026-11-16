@@ -65,12 +65,12 @@ impl Chat {
     }
 
     /// Sends one message: `prompt` is what the agent is told, `shown` what the conversation shows for it.
-    pub fn send(&mut self, ctx: &egui::Context, dir: &str, claude: &str, prompt: String, shown: String) {
+    pub fn send(&mut self, ctx: &egui::Context, dir: &str, claude: &str, folder: &str, prompt: String, shown: String) {
         if self.busy {
             return;
         }
         let resumed = session(dir);
-        let (id, cwd) = resumed.clone().unwrap_or_else(|| (uuid(), std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned()));
+        let (id, cwd) = resumed.clone().unwrap_or_else(|| (uuid(), folder.to_string()));
         if resumed.is_none() {
             let saved = serde_json::json!({ "agent": "agent", "handle": "", "id": id, "cwd": cwd });
             let _ = std::fs::write(std::path::Path::new(dir).join("session.json"), saved.to_string());

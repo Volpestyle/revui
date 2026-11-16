@@ -13,6 +13,7 @@ with none, pasting a link reviews it with Claude Code in a tab.
 | `open`, `open_more`, `open_modal` | What `o` runs to open a file. | the line on the web |
 | `drive` | How agents should drive a browser or app on this machine. | they pick a background tool |
 | `accent` | The highlight colour: a name or a hex value such as `"#d77757"`. | `#9a9ef2` |
+| `tickets` | Where a ticket id in a review opens, in the window interface: a URL with `{}` where the id goes, such as `"https://linear.app/acme/issue/{}"`. | not set: ticket ids are plain text |
 | `audience` | `"product"` for a reader who does not read code: each card leads with what it means for the product, with the technical text under "In detail", and the diff starts hidden (`d` shows it). | not set: the technical text, with the diff |
 
 `REVUI_HOME=<dir>` keeps the config and all data in that one folder instead, for

@@ -64,6 +64,32 @@ struct Review {
     map: Option<Evidence>,
 }
 
+/// Where references in prose open: the change's own URL (its neighbours differ by the number) and the ticket tracker.
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+struct Links {
+    change: Option<String>,
+    tickets: Option<String>,
+}
+
+impl Links {
+    fn of(&self, word: &str) -> Option<String> {
+        if word.starts_with("http") {
+            return Some(word.into());
+        }
+        match word.strip_prefix(['!', '#']) {
+            Some(number) => {
+                let (base, _) = self.change.as_ref().filter(|url| url.contains("/pull/") == word.starts_with('#'))?.rsplit_once('/')?;
+                Some(format!("{base}/{number}"))
+            }
+            None => {
+                let jargon = ["UTF", "SHA", "AES", "TLS", "ISO", "HTTP", "MD", "RSA", "GPT", "ES", "UTC"].contains(&word.split('-').next()?);
+                self.tickets.as_ref().filter(|_| !jargon).map(|url| url.replace("{}", word))
+            }
+        }
+    }
+}
+
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
 struct Hunk {
@@ -94,6 +120,8 @@ struct Data {
     claude: String,
     threads: Vec<Thread>,
     product: bool,
+    #[serde(rename = "refs")]
+    links: Links,
     quoted: std::collections::BTreeMap<String, bool>,
 }
 
@@ -499,7 +527,27 @@ fn inline(tones: &Tones, text: &str) -> egui::text::LayoutJob {
     job
 }
 
-fn prose(ui: &mut egui::Ui, tones: &Tones, text: &str) {
+/// A line of prose that wraps, with merge request numbers, ticket ids and URLs as links.
+fn line(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
+    static LINK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"https?://[^\s)>\]]+|\B[!#]\d+\b|\b[A-Z]{2,}-\d+\b").expect("a fixed pattern"));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let mut from = 0;
+        for found in LINK.find_iter(text) {
+            let Some(url) = links.of(found.as_str()) else { continue };
+            ui.label(inline(tones, &text[from..found.start()]));
+            let mut job = inline(tones, "");
+            job.append(found.as_str(), 0.0, egui::TextFormat { font_id: FontId::proportional(15.0), color: tones.accent, line_height: Some(23.0), underline: Stroke::new(1.0, tones.accent.gamma_multiply(0.5)), ..Default::default() });
+            if ui.add(egui::Label::new(job).sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&url).clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            }
+            from = found.end();
+        }
+        ui.label(inline(tones, &text[from..]));
+    });
+}
+
+fn prose(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
     ui.scope(|ui| {
         ui.set_max_width(680.0_f32.min(ui.available_width()));
         for block in text.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") })) {
@@ -516,10 +564,10 @@ fn prose(ui: &mut egui::Ui, tones: &Tones, text: &str) {
                 if listed {
                     ui.horizontal_top(|ui| {
                         ui.add_sized([22.0, 23.0], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).font(mono(13.0)).color(tones.dim)));
-                        ui.label(inline(tones, rest));
+                        self::line(ui, tones, links, rest);
                     });
                 } else {
-                    ui.label(inline(tones, line));
+                    self::line(ui, tones, links, line);
                 }
             }
             ui.add_space(8.0);
@@ -653,6 +701,7 @@ impl eframe::App for App {
             return self.list();
         }
         let open = self.open.as_mut().expect("a review is open");
+        let links = open.data.links.clone();
         let modal = open.contents.is_some() || open.publish.is_some();
         let pressed = |key: Key| !modal && pressed(key);
         let step = (pressed(Key::L) || pressed(Key::ArrowRight)) as isize - (pressed(Key::H) || pressed(Key::ArrowLeft)) as isize;
@@ -861,10 +910,10 @@ impl eframe::App for App {
                         });
                         ui.add_space(18.0);
                         if open.data.product && !review.plain.trim().is_empty() {
-                            prose(ui, &tones, &review.plain);
+                            prose(ui, &tones, &links, &review.plain);
                             ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
                         }
-                        prose(ui, &tones, &review.summary);
+                        prose(ui, &tones, &links, &review.summary);
                         ui.separator();
                         ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
                         ui.add_space(6.0);
@@ -928,7 +977,7 @@ impl eframe::App for App {
                         ui.label(RichText::new(&section.title).font(serif(25.0)).color(tones.strong));
                         ui.label(RichText::new(&section.tier).font(mono(11.5)).color(tones.dim));
                         ui.add_space(10.0);
-                        prose(ui, &tones, &section.why);
+                        prose(ui, &tones, &links, &section.why);
                     }
                     Card::Thread(n) => {
                         let thread = open.data.threads[n].clone();
@@ -937,14 +986,14 @@ impl eframe::App for App {
                         for (who, body, when) in &thread.notes {
                             ui.add_space(10.0);
                             ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(bold(13.0)).color(tones.strong));
-                            prose(ui, &tones, body);
+                            prose(ui, &tones, &links, body);
                         }
                     }
                     Card::Note(n) => {
                         let text = open.data.state["notes"][n]["text"].as_str().unwrap_or("").to_string();
                         ui.label(RichText::new(open.about(n)).font(serif(25.0)).color(tones.strong));
                         ui.add_space(10.0);
-                        prose(ui, &tones, &text);
+                        prose(ui, &tones, &links, &text);
                         if button(ui, &tones, &icon(Icon::Trash2, "Delete this comment"), false).clicked() {
                             let mut state = open.data.state.clone();
                             if let Some(notes) = state["notes"].as_array_mut() {
@@ -957,7 +1006,7 @@ impl eframe::App for App {
                     }
                     Card::Loose => {
                         ui.label(RichText::new("Code in no part").font(serif(25.0)).color(tones.strong));
-                        prose(ui, &tones, "These hunks are in the diff, but the guide put them in no section. Nothing vouches for them: read them.");
+                        prose(ui, &tones, &links, "These hunks are in the diff, but the guide put them in no section. Nothing vouches for them: read them.");
                     }
                     Card::Item(n) => {
                         let item = open.data.review.items[n].clone();
@@ -994,10 +1043,10 @@ impl eframe::App for App {
                         }
                         ui.add_space(10.0);
                         if open.data.product && !item.plain.trim().is_empty() {
-                            prose(ui, &tones, &item.plain);
+                            prose(ui, &tones, &links, &item.plain);
                             ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
                         }
-                        prose(ui, &tones, &item.body);
+                        prose(ui, &tones, &links, &item.body);
                         ui.separator();
                         ui.label(RichText::new(format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() })).font(bold(14.0)).color(tones.strong));
                         for (n, evidence) in item.evidence.iter().enumerate() {

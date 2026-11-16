@@ -286,6 +286,7 @@ pub fn json(bundle: &Bundle) -> String {
         "dates": dates,
         "session": session,
         "product": mrs::product_view(),
+        "refs": { "change": bundle.review.sources.first().map(|source| source.url.as_str()).filter(|url| !url.is_empty()), "tickets": mrs::tickets() },
         "claude": mrs::claude(),
         "check": { "ok": ok, "report": report },
     })

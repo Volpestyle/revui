@@ -20,6 +20,7 @@ struct Config {
     drive: Option<String>,
     accent: Option<String>,
     audience: Option<String>,
+    tickets: Option<String>,
     open: Option<String>,
     open_more: Option<String>,
     #[serde(default)]
@@ -213,6 +214,11 @@ pub fn generate_command() -> String {
 
 pub fn apply_accent() {
     crate::set_accent(&config().accent.unwrap_or_default());
+}
+
+/// Where a ticket id such as ORC-12 opens: a URL with `{}` where the id goes.
+pub fn tickets() -> Option<String> {
+    config().tickets.filter(|url| url.contains("{}"))
 }
 
 /// The reader does not read code: lead with what a finding means for the product, and keep the diff out of the way.

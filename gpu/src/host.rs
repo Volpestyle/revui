@@ -31,6 +31,16 @@ mod at {
         format!("file://{}", std::path::Path::new(dir).join(path).display())
     }
 
+    /// Hands a file of the bundle to whatever this machine opens it with: Preview, QuickTime, a browser.
+    pub fn open(dir: &str, path: &str) {
+        let (dir, file) = (std::path::Path::new(dir).canonicalize(), std::path::Path::new(dir).join(path).canonicalize());
+        if let (Ok(dir), Ok(file)) = (dir, file) {
+            if file.starts_with(dir) {
+                let _ = Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" }).arg(file).spawn();
+            }
+        }
+    }
+
     pub fn stamp(dir: &str) -> String {
         let newest = ["review.json", "state.json", "threads.json"].iter().filter_map(|name| std::fs::metadata(std::path::Path::new(dir).join(name)).and_then(|file| file.modified()).ok()).max();
         format!("{newest:?}")
@@ -79,6 +89,10 @@ mod at {
     pub fn uri(dir: &str, path: &str) -> String {
         let origin = web_sys::window().and_then(|window| window.location().origin().ok()).unwrap_or_default();
         format!("{origin}/bundle/{path}?dir={}", quoted(dir))
+    }
+
+    pub fn open(dir: &str, path: &str) {
+        let _ = web_sys::window().map(|window| window.open_with_url_and_target(&uri(dir, path), "_blank"));
     }
 
     pub fn stamp(dir: &str) -> String {

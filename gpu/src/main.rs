@@ -498,12 +498,15 @@ fn serif(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("serif".into()))
 }
 
-/// A picture from the bundle shown in place; anything else it holds (a recording, a file) as a link that opens it.
+/// A picture from the bundle shown in place; anything else it holds (a recording, a file) as a link. Either opens in the machine's own viewer or player.
 fn artifact(ui: &mut egui::Ui, dir: &str, path: &str) {
     let shown = matches!(std::path::Path::new(path).extension().and_then(|kind| kind.to_str()), Some("png" | "jpg" | "jpeg" | "gif" | "webp"));
-    match shown {
-        true => drop(ui.add(egui::Image::new(host::uri(dir, path)).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(0.0))),
-        false => drop(ui.hyperlink_to(format!("Open {path}"), host::uri(dir, path))),
+    let hit = match shown {
+        true => ui.add(egui::Image::new(host::uri(dir, path)).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(0.0).sense(egui::Sense::click())),
+        false => ui.link(format!("Open {path}")),
+    };
+    if hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open it (Enter)").clicked() {
+        host::open(dir, path);
     }
 }
 
@@ -842,6 +845,11 @@ impl eframe::App for App {
         if pressed(Key::V) && !shift {
             open.agent = true;
             open.tell(&ctx, "verify", "");
+            if let (true, Card::Item(n)) = (pressed(Key::Enter) || pressed(Key::O), open.cards[open.at]) {
+                if let Some(path) = open.data.review.items[n].evidence.get(open.proof).and_then(|evidence| evidence.path.as_ref()) {
+                    host::open(&open.dir, path);
+                }
+            }
         }
         if pressed(Key::I) {
             open.agent = true;
@@ -886,7 +894,7 @@ impl eframe::App for App {
             });
         });
         egui::Panel::bottom("keys").frame(frame.inner_margin(egui::Margin::symmetric(14, 5))).show_inside(ui, |ui| {
-            let here = if open.in_diff { "j k line · V select lines · c comment on them · tab next panel" } else { "j k scroll · e evidence · a agree · x dismiss · c comment · tab next panel" };
+            let here = if open.in_diff { "j k line · V select lines · c comment on them · tab next panel" } else { "j k scroll · e evidence · enter open it · a agree · x dismiss · c comment · tab next panel" };
             let said = if open.note.is_empty() { String::new() } else { format!("   {}", open.note) };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if open.agent && open.minimized {

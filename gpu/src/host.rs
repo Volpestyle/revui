@@ -15,7 +15,7 @@ mod at {
         let out = child.wait_with_output().map_err(|e| e.to_string())?;
         match out.status.success() {
             true => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
-            false => Err(String::from_utf8_lossy(&out.stderr).lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("revui failed").trim().to_string()),
+            false => Err(String::from_utf8_lossy(&out.stderr).lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("revui failed").trim().trim_start_matches("Error: ").trim_matches('"').to_string()),
         }
     }
 

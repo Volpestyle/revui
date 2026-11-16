@@ -148,11 +148,12 @@ mod native {
         format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..])
     }
 
-    /// The session to carry on, as (id, folder), when this bundle's agent has one that can be resumed.
+    /// The session to carry on, as (id, folder), when this bundle's agent has one that can be resumed: the one this
+    /// window started, or the one a pane of the person's terminal is carrying.
     pub fn session(dir: &str) -> Option<(String, String)> {
         let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::path::Path::new(dir).join("session.json")).ok()?).ok()?;
         let (id, cwd) = (saved["id"].as_str()?, saved["cwd"].as_str()?);
-        (saved["agent"] == "agent" && !id.is_empty() && std::path::Path::new(cwd).is_dir()).then(|| (id.to_string(), cwd.to_string()))
+        (!id.is_empty() && std::path::Path::new(cwd).is_dir()).then(|| (id.to_string(), cwd.to_string()))
     }
 
     impl Chat {

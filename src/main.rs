@@ -99,7 +99,7 @@ impl Panes {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Session {
     agent: String,
     handle: String,
@@ -1876,24 +1876,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let first = part.and_then(|part| bundle.groups.get(part)?.first()).map(|&(file, hunk)| (bundle.files[file].path.as_str(), bundle.files[file].hunks[hunk].new_start.max(1)));
             let place = item.and_then(|item| item.at.as_ref()).map(|at| (at.file.as_str(), at.line)).or(first).unwrap_or(("", 0));
             let section = part.and_then(|part| bundle.review.sections.get(part));
-            let prompt = |fresh| shared::prompt(&bundle, mode, fresh, item, place, section, &[]);
+            // What the person typed comes on stdin, from a front end that has a box for it.
+            let typed = {
+                use std::io::IsTerminal;
+                if what == "agent" && !std::io::stdin().is_terminal() { std::io::read_to_string(std::io::stdin()).unwrap_or_default() } else { String::new() }
+            };
+            let prompt = |fresh| shared::prompt(&bundle, mode, fresh, item, place, section, &[]) + typed.trim();
             if what == "prompt" {
                 return Ok(println!("{}", prompt(args.iter().any(|arg| arg == "--fresh"))));
             }
             let agent = mrs::agents().into_iter().find(|agent| !agent.modal).ok_or("No pane to open an agent in: start revui web inside tmux, Herdr, Orca or Cursor, or name an agent with a pane of its own under \"agents\" in the config.")?;
             let file = bundle.dir.join("session.json");
-            let saved = std::fs::read_to_string(&file).ok().and_then(|saved| serde_json::from_str::<Session>(&saved).ok()).filter(|saved| saved.agent == agent.name && !saved.handle.is_empty());
+            // One conversation a review: a pane carries on the Claude Code session the review already has, or starts
+            // the one every later ask, here or in a window, resumes.
+            let kept = std::fs::read_to_string(&file).ok().and_then(|saved| serde_json::from_str::<Session>(&saved).ok());
+            let saved = kept.clone().filter(|saved| saved.agent == agent.name && !saved.handle.is_empty());
+            let known = kept.filter(|kept| !kept.id.is_empty() && Path::new(&kept.cwd).is_dir()).map(|kept| (kept.id, kept.cwd));
+            let fresh_id = uuid();
+            let (id, cwd) = known.clone().unwrap_or_else(|| (fresh_id.clone(), mrs::checkout(&bundle.dir, None).unwrap_or_else(|_| ".".into())));
+            let claude = format!("{} {} {id}", mrs::claude(), if known.is_some() { "--resume" } else { "--session-id" });
             // ponytail: an agent's script gets the prompt, the session and the review here, not the file and line the terminal viewer adds
             let run = |script: &str, fresh: bool, handle: &str| {
                 let prompt = prompt(fresh);
                 let source = bundle.review.sources.first();
                 std::process::Command::new("sh")
                     .args(["-c", script])
-                    .env("REVUI_CLAUDE", mrs::claude())
+                    .env("REVUI_CLAUDE", if fresh { claude.clone() } else { mrs::claude() })
                     .env("REVUI_DIR", &bundle.dir)
                     .env("REVUI_URL", source.map_or("", |s| s.url.as_str()))
                     .env("REVUI_ITEM", item.map_or("", |item| item.id.as_str()))
+                    .env("REVUI_SESSION_ID", &id)
                     .env("REVUI_SESSION", handle)
+                    .current_dir(if fresh && Path::new(&cwd).is_dir() { cwd.as_str() } else { "." })
                     .env("REVUI_PROMPT_URI", url_encode(&prompt))
                     .env("REVUI_PROMPT", prompt)
                     .stdin(std::process::Stdio::null())
@@ -1904,12 +1918,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return Ok(println!("Sent to the agent in the {}.", agent.name));
                 }
             }
+            if args.iter().any(|arg| arg == "--if-open") {
+                return Err(format!("No agent of this review is open in a {}.", agent.name).into());
+            }
             let ran = run(&agent.run, true, "")?;
             if !ran.status.success() {
                 let said = String::from_utf8_lossy(&ran.stderr).into_owned() + &String::from_utf8_lossy(&ran.stdout);
                 return Err(format!("Could not start an agent in a {}: {}", agent.name, said.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("no output").trim()).into());
             }
-            let session = Session { agent: agent.name.clone(), handle: String::from_utf8_lossy(&ran.stdout).trim().to_string(), id: String::new(), cwd: String::new() };
+            let cwd = std::fs::canonicalize(&cwd).map_or(cwd.clone(), |cwd| cwd.to_string_lossy().into_owned());
+            let session = Session { agent: agent.name.clone(), handle: String::from_utf8_lossy(&ran.stdout).trim().to_string(), id, cwd };
             std::fs::write(file, serde_json::to_string(&session)?)?;
             return Ok(println!("Started an agent in a {}.", agent.name));
         }
@@ -2000,7 +2018,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui state <dir>       save your marks, read as JSON from stdin\n\
                  revui threads <dir>     ask the host what is already said on the merge request\n\
                  revui prompt <dir> ask|verify|artifact|guide [item id | part number] [--fresh]   what an agent is told\n\
-                 revui agent <dir> ask|verify|artifact|guide [item id | part number]   tell it to an agent in a pane of tmux, Herdr, Orca or Cursor\n\
+                 revui agent <dir> ask|verify|artifact|guide [item id | part number] [--if-open]   tell it to the review's agent in a pane of tmux, Herdr, Orca or Cursor, with what you typed on stdin; --if-open only when it is already open there\n\
                  revui publish <dir> 1|2|3   post the text on stdin: one comment, one comment and approve, or threads\n\
                  revui check <dir>       validate a bundle, exit 1 on problems\n\
                  revui shot <url|file> <out.png> [WxH]   screenshot a page in headless Chrome\n\

@@ -330,6 +330,15 @@ impl Open {
     /// Tells the agent: a question typed in ask mode, or the verify or artifact request for the card shown.
     fn tell(&mut self, ctx: &egui::Context, mode: &str, text: &str) {
         let on = self.on();
+        // While the review's agent is open in a pane of the person's terminal, it is told there: one agent, wherever it runs.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let args: Vec<&str> = ["agent", self.dir.as_str(), mode].into_iter().chain(on.as_deref()).chain(["--if-open"]).collect();
+            if let Ok(sent) = revui(&args, Some(text)) {
+                self.chat.log.push(chat::Said::Me(if text.is_empty() { format!("{mode} {}", on.clone().unwrap_or_default()) } else { text.to_string() }));
+                return self.note = sent.trim().to_string();
+            }
+        }
         let fresh = chat::session(&self.dir).is_none();
         let args: Vec<&str> = ["prompt", self.dir.as_str(), mode].into_iter().chain(on.as_deref()).chain(fresh.then_some("--fresh")).collect();
         match revui(&args, None) {
@@ -713,10 +722,13 @@ fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
             let (other, hint) = if open.floating { (Icon::PanelRight, "Dock to the side (Cmd-Shift-D)") } else { (Icon::PictureInPicture2, "Detach: a panel you can move and resize (Cmd-Shift-D)") };
             open.floating ^= small(ui, other, hint);
             #[cfg(not(target_arch = "wasm32"))]
-            if small(ui, Icon::SquareTerminal, "Carry this conversation on in a terminal: the same Claude Code session, as `revui resume` starts it anywhere") {
-                if let Err(problem) = revui(&["resume", &open.dir], None) {
-                    open.note = problem;
-                }
+            if small(ui, Icon::SquareTerminal, "Open this agent in a pane of your terminal: the same conversation, and while it is open there, what you ask here is typed into it") {
+                let (on, _) = (open.on(), open.folder());
+                let args: Vec<&str> = ["agent", open.dir.as_str(), "ask"].into_iter().chain(on.as_deref()).collect();
+                open.note = match revui(&args, None).or_else(|_| revui(&["resume", &open.dir], None)) {
+                    Ok(said) => said.trim().to_string(),
+                    Err(problem) => problem,
+                };
             }
         });
     });

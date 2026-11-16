@@ -32,9 +32,15 @@ find its own way.
 The conversation is that Claude Code session and nothing else. The panel reads it from
 the transcript Claude Code keeps, so it shows what was said before the window opened, and
 rolls the agent's tool calls up into a line you can open: to the calls, then to what each
-ran and what came back. The terminal button in its header carries the same session on in
-a terminal of yours, as `revui resume <dir>` does from any terminal, and what happens
-there shows up in the panel. In a browser there is no process to start: Ask, Verify and Diagram go to an agent
+ran and what came back.
+
+There is one agent a review, wherever it runs. The terminal button in the panel's header
+opens it in a pane of your terminal (the first entry of `agents` that has a pane of its
+own), on the same session. While it is open there, Ask, Verify and Diagram type into that
+pane instead of starting a run of their own, and what it does shows up in the panel. With
+the pane closed, they run it here again. Without such an entry the button resumes the
+session in the machine's terminal app, as `revui resume <dir>` does from any terminal;
+nothing can be typed into that one, so close it before asking here. In a browser there is no process to start: Ask, Verify and Diagram go to an agent
 in a pane of the app the page sits in (tmux, Herdr, Orca, Cursor), through `revui agent`.
 
 ## Checking and recording it

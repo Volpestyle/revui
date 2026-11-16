@@ -1,3 +1,4 @@
+mod chat;
 mod map;
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Key, RichText, Stroke};
@@ -86,6 +87,7 @@ struct Data {
     preview: String,
     finish: Vec<String>,
     system: Option<System>,
+    claude: String,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -189,6 +191,9 @@ struct Open {
     publish: Option<(usize, String)>,
     note: String,
     painted: std::collections::HashMap<(usize, usize), Painted>,
+    chat: chat::Chat,
+    agent: bool,
+    ask: bool,
 }
 
 impl Open {
@@ -205,7 +210,7 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default() })
+        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false })
     }
 
     fn group(&self) -> Option<usize> {
@@ -230,6 +235,31 @@ impl Open {
             Card::Item(n) => format!("{} {}", self.data.review.items[n].id, self.data.review.items[n].title),
             Card::Note(n) => self.about(n),
             Card::Loose => "Code in no part".into(),
+        }
+    }
+
+    /// What a message to the agent is about: the finding shown, or the part.
+    fn on(&self) -> Option<String> {
+        match self.cards[self.at] {
+            Card::Item(n) => Some(self.data.review.items[n].id.clone()),
+            Card::Part(part) => Some((part + 1).to_string()),
+            _ => None,
+        }
+    }
+
+    /// Tells the agent: a question typed in ask mode, or the verify or artifact request for the card shown.
+    fn tell(&mut self, ctx: &egui::Context, mode: &str, text: &str) {
+        let on = self.on();
+        let fresh = chat::session(&self.dir).is_none();
+        let args: Vec<&str> = ["prompt", self.dir.as_str(), mode].into_iter().chain(on.as_deref()).chain(fresh.then_some("--fresh")).collect();
+        match revui(&args, None) {
+            Ok(prompt) => {
+                let prompt = prompt.trim_end_matches('\n').to_string();
+                let shown = if text.is_empty() { format!("{mode} {}", on.unwrap_or_default()) } else { text.to_string() };
+                let claude = self.data.claude.clone();
+                self.chat.send(ctx, &self.dir.clone(), &claude, format!("{prompt}{text}"), shown);
+            }
+            Err(problem) => self.note = problem,
         }
     }
 
@@ -268,6 +298,7 @@ impl Open {
     fn refresh(&mut self) -> Result<(), String> {
         let fresh = Self::load(&self.dir)?;
         (self.data, self.cards) = (fresh.data, fresh.cards);
+        self.painted.clear();
         self.at = self.at.min(self.cards.len() - 1);
         Ok(())
     }
@@ -525,6 +556,21 @@ impl eframe::App for App {
             open.proof = (open.proof as isize + down).clamp(0, open.data.review.items[n].evidence.len().saturating_sub(1) as isize) as usize;
         }
         open.compose |= pressed(Key::C);
+        if pressed(Key::T) {
+            (open.agent, open.ask) = (true, true);
+        }
+        if ctx.input(|input| input.modifiers.command && input.key_pressed(Key::J)) {
+            open.agent = !open.agent;
+        }
+        if pressed(Key::V) {
+            open.agent = true;
+            open.tell(&ctx, "verify", "");
+        }
+        if pressed(Key::I) {
+            open.agent = true;
+            open.tell(&ctx, "artifact", "");
+        }
+        open.chat.take();
         if pressed(Key::P) {
             open.publish = Some((0, open.data.preview.clone()));
         }
@@ -547,6 +593,7 @@ impl eframe::App for App {
                     if button(ui, &tones, &format!("Publish {}", open.data.outgoing), true).clicked() {
                         open.publish = Some((0, open.data.preview.clone()));
                     }
+                    open.agent ^= button(ui, &tones, if open.chat.busy { "Agent · working" } else { "Agent" }, open.agent).clicked();
                     open.diff ^= button(ui, &tones, "Diff", open.diff).clicked();
                     if button(ui, &tones, "Contents", false).clicked() {
                         open.contents = Some(open.at);
@@ -557,8 +604,59 @@ impl eframe::App for App {
         egui::Panel::bottom("keys").frame(frame.inner_margin(egui::Margin::symmetric(14, 5))).show_inside(ui, |ui| {
             let here = if open.in_diff { "j k line · c comment on the line · tab card" } else { "j k evidence · a agree · x dismiss · c comment · tab diff" };
             let said = if open.note.is_empty() { String::new() } else { format!("   {}", open.note) };
-            ui.label(RichText::new(format!("l next · h back · {here} · d diff · b contents · p publish · q reviews{said}")).font(mono(11.5)).color(tones.dim));
+            ui.label(RichText::new(format!("l next · h back · {here} · t ask · v verify · i diagram · d diff · b contents · p publish · q reviews{said}")).font(mono(11.5)).color(tones.dim));
         });
+
+        if open.agent {
+            egui::Panel::right("agent").default_size(380.0).frame(frame.inner_margin(14.0).stroke(Stroke::new(1.0, tones.line))).show_inside(ui, |ui| {
+                ui.label(RichText::new("Agent").font(mono(13.0)).color(tones.strong).strong());
+                ui.add_space(6.0);
+                egui::Panel::bottom("say").frame(egui::Frame::new()).show_inside(ui, |ui| {
+                    let about = open.on().map_or("Ask about this review".to_string(), |on| format!("Ask about {on}"));
+                    let field = ui.add(egui::TextEdit::multiline(&mut open.chat.draft).desired_width(f32::INFINITY).desired_rows(3).hint_text(about));
+                    if std::mem::take(&mut open.ask) {
+                        field.request_focus();
+                    }
+                    let entered = field.has_focus() && ui.input(|input| input.key_pressed(Key::Enter) && !input.modifiers.shift);
+                    ui.horizontal(|ui| {
+                        let verify = button(ui, &tones, "Verify", false).clicked();
+                        let draw = button(ui, &tones, "Diagram", false).clicked();
+                        let stop = open.chat.busy && button(ui, &tones, "Stop", false).clicked();
+                        let send = !open.chat.busy && (button(ui, &tones, "Send", true).clicked() || entered);
+                        if stop {
+                            open.chat.stop();
+                        }
+                        if verify {
+                            open.tell(ui.ctx(), "verify", "");
+                        }
+                        if draw {
+                            open.tell(ui.ctx(), "artifact", "");
+                        }
+                        if send && !open.chat.draft.trim().is_empty() {
+                            let text = std::mem::take(&mut open.chat.draft);
+                            open.tell(ui.ctx(), "ask", text.trim());
+                        }
+                    });
+                });
+                egui::ScrollArea::vertical().auto_shrink(false).stick_to_bottom(true).show(ui, |ui| {
+                    if open.chat.log.is_empty() {
+                        ui.label(RichText::new("This review's agent. It wrote the guide, so it already knows the change. Ask it about the card you are on.").size(13.0).color(tones.dim));
+                    }
+                    for said in &open.chat.log {
+                        match said {
+                            chat::Said::Me(text) => drop(egui::Frame::new().fill(tones.accent).inner_margin(8.0).show(ui, |ui| ui.label(RichText::new(text).size(13.5).color(tones.on_accent)))),
+                            chat::Said::Agent(text) => drop(ui.add(egui::Label::new(RichText::new(text).size(13.5).color(tones.text)).selectable(true))),
+                            chat::Said::Tool(text) => drop(ui.label(RichText::new(text).font(mono(11.5)).color(tones.dim))),
+                            chat::Said::Problem(text) => drop(ui.label(RichText::new(text).size(13.0).color(tones.rust))),
+                        }
+                        ui.add_space(6.0);
+                    }
+                    if open.chat.busy {
+                        ui.label(RichText::new("working").font(mono(11.5)).color(tones.dim));
+                    }
+                });
+            });
+        }
 
         if let (true, Some(group)) = (open.diff, open.group()) {
             egui::Panel::right("diff").default_size(620.0).frame(egui::Frame::new().fill(INK)).show_inside(ui, |ui| {

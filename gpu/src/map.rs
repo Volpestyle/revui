@@ -41,10 +41,14 @@ fn state(name: &str) -> Option<&'static str> {
 
 /// Reads the flowchart the guide writes for the map: nodes, who calls whom, and what the change does to each.
 pub fn parse(text: &str) -> (Vec<Node>, Vec<Edge>) {
-    let node = Regex::new(r"^([\w-]+)(\[\[(.+?)\]\]|\[\((.+?)\)\]|\(\((.+?)\)\)|\[(.+?)\]|\((.+?)\)|\{(.+?)\})?(?::::([\w-]+))?$").unwrap();
-    let link = Regex::new(r"\s*(?:-\.\s*([^.>]*?)\s*\.->|--\s+([^->|]+?)\s+-->|[-=]{2,}>\s*\|(.*?)\||[-=]{2,}>|-{3,})\s*").unwrap();
-    let class = Regex::new(r"^class\s+([\w,\s-]+?)\s+([\w-]+)$").unwrap();
-    let skip = Regex::new(r"^(flowchart|graph|classDef|subgraph|end\b|linkStyle|style|direction|%%)").unwrap();
+    // Compiled once: the summary draws its map every frame.
+    static READ: std::sync::LazyLock<[Regex; 4]> = std::sync::LazyLock::new(|| [
+        Regex::new(r"^([\w-]+)(\[\[(.+?)\]\]|\[\((.+?)\)\]|\(\((.+?)\)\)|\[(.+?)\]|\((.+?)\)|\{(.+?)\})?(?::::([\w-]+))?$").unwrap(),
+        Regex::new(r"\s*(?:-\.\s*([^.>]*?)\s*\.->|--\s+([^->|]+?)\s+-->|[-=]{2,}>\s*\|(.*?)\||[-=]{2,}>|-{3,})\s*").unwrap(),
+        Regex::new(r"^class\s+([\w,\s-]+?)\s+([\w-]+)$").unwrap(),
+        Regex::new(r"^(flowchart|graph|classDef|subgraph|end\b|linkStyle|style|direction|%%)").unwrap(),
+    ]);
+    let [node, link, class, skip] = &*READ;
     let (mut nodes, mut edges): (Vec<Node>, Vec<Edge>) = (Vec::new(), Vec::new());
     let mut touch = |nodes: &mut Vec<Node>, raw: &str| -> Option<String> {
         let found = node.captures(raw.trim())?;

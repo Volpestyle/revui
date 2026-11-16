@@ -1101,41 +1101,76 @@ impl eframe::App for App {
 
         if let (true, Some(group)) = (open.diff, open.group()) {
             let mut clicked = None;
+            // Every row of the diff is one height, so only the rows in view are laid out and coloured: a part can run to thousands of lines.
+            const TALL: f32 = 19.0;
+            enum Shown {
+                Gap,
+                File(usize),
+                Hunk(usize, usize),
+                Line { file: usize, hunk: usize, nth: usize, number: u32, sign: char, at: usize },
+            }
+            let mut rows = Vec::new();
+            let (mut last, mut at) = (usize::MAX, 0);
+            for &(file, hunk_at) in &open.data.groups[group] {
+                let hunk = &open.data.files[file].hunks[hunk_at];
+                if file != last {
+                    rows.extend((last != usize::MAX).then_some(Shown::Gap));
+                    rows.push(Shown::File(file));
+                    last = file;
+                }
+                rows.push(Shown::Hunk(file, hunk_at));
+                let (mut old, mut new) = (hunk.old_start, hunk.new_start);
+                for (nth, line) in hunk.lines.iter().enumerate() {
+                    let sign = line.chars().next().unwrap_or(' ');
+                    let number = if sign == '-' { old } else { new };
+                    match sign {
+                        '-' => old += 1,
+                        '+' => new += 1,
+                        '\\' => {}
+                        _ => (old, new) = (old + 1, new + 1),
+                    }
+                    rows.push(Shown::Line { file, hunk: hunk_at, nth, number, sign, at });
+                    at += (sign != '\\') as usize;
+                }
+            }
+            let cursor = rows.iter().position(|row| matches!(row, Shown::Line { at, sign, .. } if *sign != '\\' && *at == open.line));
             egui::Panel::right("diff").default_size(620.0).frame(egui::Frame::new().fill(INK)).show_inside(ui, |ui| {
-                egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    let mut last = usize::MAX;
-                    let mut row = 0;
-                    for &(file, hunk_at) in &open.data.groups[group] {
-                        let (shown, hunk) = (&open.data.files[file], &open.data.files[file].hunks[hunk_at]);
-                        let painted = open.painted.entry((file, hunk_at)).or_insert_with(|| paint(&shown.path, &hunk.lines));
-                        if file != last {
-                            egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| ui.label(RichText::new(&shown.path).font(mono(13.0)).color(Color32::WHITE).strong()));
-                            last = file;
-                        }
-                        egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 4)).show(ui, |ui| ui.label(RichText::new(&hunk.header).font(mono(11.0)).color(Color32::from_white_alpha(120))));
-                        let (mut old, mut new) = (hunk.old_start, hunk.new_start);
-                        for (nth, line) in hunk.lines.iter().enumerate() {
-                            let sign = line.chars().next().unwrap_or(' ');
-                            let number = if sign == '-' { old } else { new };
-                            match sign {
-                                '-' => old += 1,
-                                '+' => new += 1,
-                                '\\' => {}
-                                _ => (old, new) = (old + 1, new + 1),
-                            }
-                            let (fill, ink) = match sign {
-                                '+' => (ADDED, Color32::WHITE),
-                                '-' => (REMOVED, Color32::from_white_alpha(170)),
-                                _ => (Color32::TRANSPARENT, Color32::from_white_alpha(140)),
-                            };
-                            let this = row;
-                            let under = open.in_diff && sign != '\\' && row == open.line;
-                            let chosen = open.in_diff && sign != '\\' && open.range.is_some_and(|from| (from.min(open.line)..=from.max(open.line)).contains(&row));
-                            row += (sign != '\\') as usize;
-                            let drawn = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, if under { Color32::WHITE } else { Color32::TRANSPARENT })).show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
-                                ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                egui::ScrollArea::both().auto_shrink(false).show_rows(ui, TALL, rows.len(), |ui, seen| {
+                    if let (true, true, Some(cursor)) = (open.in_diff, open.moved, cursor) {
+                        let top = ui.max_rect().top() + (cursor as f32 - seen.start as f32) * TALL;
+                        ui.scroll_to_rect(egui::Rect::from_min_size(egui::pos2(ui.max_rect().left(), top), egui::vec2(1.0, TALL)), None);
+                    }
+                    let across = egui::Layout::left_to_right(egui::Align::Center);
+                    for row in &rows[seen] {
+                        let band = egui::Rect::from_min_size(egui::pos2(ui.clip_rect().left(), ui.cursor().top()), egui::vec2(ui.clip_rect().width(), TALL));
+                        let wide = egui::vec2(ui.available_width(), TALL);
+                        match *row {
+                            Shown::Gap => drop(ui.allocate_space(egui::vec2(1.0, TALL))),
+                            Shown::File(file) => drop(ui.allocate_ui_with_layout(wide, across, |ui| {
+                                ui.add_space(14.0);
+                                ui.label(RichText::new(&open.data.files[file].path).font(mono(13.0)).color(Color32::WHITE).strong());
+                            })),
+                            Shown::Hunk(file, hunk) => drop(ui.allocate_ui_with_layout(wide, across, |ui| {
+                                ui.add_space(14.0);
+                                ui.label(RichText::new(&open.data.files[file].hunks[hunk].header).font(mono(11.0)).color(Color32::from_white_alpha(120)));
+                            })),
+                            Shown::Line { file, hunk, nth, number, sign, at } => {
+                                let (shown, lines) = (&open.data.files[file], &open.data.files[file].hunks[hunk].lines);
+                                let painted = open.painted.entry((file, hunk)).or_insert_with(|| paint(&shown.path, lines));
+                                let (fill, ink) = match sign {
+                                    '+' => (ADDED, Color32::WHITE),
+                                    '-' => (REMOVED, Color32::from_white_alpha(170)),
+                                    _ => (Color32::TRANSPARENT, Color32::from_white_alpha(140)),
+                                };
+                                let under = open.in_diff && sign != '\\' && at == open.line;
+                                let chosen = open.in_diff && sign != '\\' && open.range.is_some_and(|from| (from.min(open.line)..=from.max(open.line)).contains(&at));
+                                ui.painter().rect_filled(band, 0.0, fill);
+                                if chosen {
+                                    ui.painter().rect_filled(band, 0.0, Color32::from_white_alpha(28));
+                                    ui.painter().rect_filled(egui::Rect::from_min_size(band.min, egui::vec2(3.0, TALL)), 0.0, Color32::WHITE);
+                                }
+                                ui.allocate_ui_with_layout(wide, across, |ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;
                                     ui.label(RichText::new(format!("{number:>5} ")).font(mono(11.0)).color(Color32::from_white_alpha(120)));
                                     ui.label(RichText::new(format!("{sign} ")).font(mono(12.5)).color(match sign {
@@ -1148,19 +1183,14 @@ impl eframe::App for App {
                                         let color = if sign == '-' { color.gamma_multiply(0.6) } else if sign == '+' { *color } else { color.gamma_multiply(0.75) };
                                         code.append(text, 0.0, egui::TextFormat { font_id: mono(12.5), color, ..Default::default() });
                                     }
-                                    let _ = ink;
                                     ui.add(egui::Label::new(code).extend());
                                 });
-                            });
-                            if chosen {
-                                ui.painter().rect_filled(drawn.response.rect, 0.0, Color32::from_white_alpha(28));
-                                ui.painter().rect_filled(egui::Rect::from_min_size(drawn.response.rect.min, egui::vec2(3.0, drawn.response.rect.height())), 0.0, Color32::WHITE);
-                            }
-                            if under && open.moved {
-                                drawn.response.scroll_to_me(None);
-                            }
-                            if sign != '\\' && drawn.response.interact(egui::Sense::click()).clicked() {
-                                clicked = Some(this);
+                                if under {
+                                    ui.painter().rect_stroke(band, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
+                                }
+                                if sign != '\\' && ui.interact(band, ui.id().with(("diff line", at)), egui::Sense::click()).clicked() {
+                                    clicked = Some(at);
+                                }
                             }
                         }
                     }

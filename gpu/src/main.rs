@@ -1124,16 +1124,54 @@ impl eframe::App for App {
             let mut go = None;
             let (down, enter, leave) = ctx.input(|input| ((input.key_pressed(Key::J) || input.key_pressed(Key::ArrowDown)) as isize - (input.key_pressed(Key::K) || input.key_pressed(Key::ArrowUp)) as isize, input.key_pressed(Key::Enter), input.key_pressed(Key::Escape)));
             on = (on as isize + down).clamp(0, open.cards.len() as isize - 1) as usize;
-            egui::Window::new(RichText::new("Contents").font(serif(20.0)).color(tones.strong)).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).fixed_pos(middle).show(&ctx, |ui| {
-                ui.set_min_width(520.0);
-                for (n, card) in open.cards.iter().enumerate() {
-                    let label = RichText::new(open.label(*card)).font(if matches!(card, Card::Item(_)) { mono(12.5) } else { bold(13.5) });
-                    let label = if n == on { label.color(tones.on_accent) } else { label.color(tones.strong) };
-                    if ui.add_sized([520.0, 24.0], egui::Button::selectable(n == on, label).right_text("")).clicked() {
-                        go = Some(n);
+            let seen = egui::Id::new("contents row");
+            let moved = ctx.data(|data| data.get_temp::<usize>(seen)) != Some(on);
+            ctx.data_mut(|data| data.insert_temp(seen, on));
+            let frame = egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.strong)).inner_margin(egui::Margin::symmetric(0, 16));
+            let shown = egui::Modal::new(egui::Id::new("contents")).frame(frame).show(&ctx, |ui| {
+                ui.set_width(600.0_f32.min(ui.ctx().content_rect().width() - 80.0));
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(RichText::new("Contents").font(serif(22.0)).color(tones.strong));
+                });
+                ui.add_space(10.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() * 0.6).show(ui, |ui| {
+                    for (n, card) in open.cards.iter().enumerate() {
+                        let nested = matches!(card, Card::Item(_) | Card::Thread(_) | Card::Note(_));
+                        let (row, hit) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+                        let ink = if n == on { tones.on_accent } else if hit.hovered() { tones.accent } else if nested { tones.text } else { tones.strong };
+                        if n == on {
+                            ui.painter().rect_filled(row, 0.0, tones.accent);
+                            if moved {
+                                hit.scroll_to_me(Some(egui::Align::Center));
+                            }
+                        }
+                        ui.painter().hline(row.x_range(), row.bottom(), Stroke::new(1.0, tones.line));
+                        if let Card::Item(item) = card {
+                            let mark = match open.verdict(&open.data.review.items[*item].id) {
+                                Some("dismiss") => Some(tones.rust),
+                                Some(_) => Some(if n == on { tones.on_accent } else { tones.accent }),
+                                None => None,
+                            };
+                            if let Some(mark) = mark {
+                                ui.painter().rect_filled(egui::Rect::from_center_size(egui::pos2(row.left() + 24.0, row.center().y), egui::vec2(7.0, 7.0)), 0.0, mark);
+                            }
+                        }
+                        let inner = egui::Rect::from_min_max(row.min + egui::vec2(if nested { 38.0 } else { 20.0 }, 0.0), row.max - egui::vec2(20.0, 0.0));
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+                            ui.add(egui::Label::new(RichText::new(open.label(*card)).font(if nested { mono(12.5) } else { bold(14.0) }).color(ink)).truncate().selectable(false));
+                        });
+                        if hit.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            go = Some(n);
+                        }
                     }
-                }
+                });
             });
+            let leave = leave || shown.should_close();
+            if leave || go.is_some() || enter {
+                ctx.data_mut(|data| data.remove::<usize>(seen));
+            }
             open.contents = if leave { None } else { Some(on) };
             if let Some(n) = go.or(enter.then_some(on)) {
                 (open.at, open.contents, open.in_diff, open.line, open.proof) = (n, None, false, 0, 0);

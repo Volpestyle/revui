@@ -463,15 +463,16 @@ fn artifact(ui: &mut egui::Ui, dir: &str, path: &str) {
 }
 
 /// The revui mark: a sheet with a check, drawn in the colours of the appearance.
-fn logo(ui: &mut egui::Ui, size: f32) {
+fn logo(ui: &mut egui::Ui, size: f32) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let (back, body, check) = if dark { (Color32::from_rgb(169, 172, 247), Color32::from_rgb(243, 244, 248), Color32::from_rgb(8, 9, 12)) } else { (Color32::from_rgb(91, 110, 225), Color32::from_rgb(8, 9, 12), Color32::from_rgb(243, 244, 248)) };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let (rect, mark) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let at = |x: f32, y: f32| rect.min + egui::vec2(x, y) * (size / 111.0);
     let painter = ui.painter();
     painter.line(vec![at(11.0, 3.25), at(74.65, 3.25), at(107.75, 36.35), at(107.75, 100.0)], Stroke::new(6.5 * size / 111.0, back));
     painter.add(egui::Shape::convex_polygon(vec![at(0.0, 11.0), at(65.0, 11.0), at(100.0, 46.0), at(100.0, 111.0), at(0.0, 111.0)], body, Stroke::NONE));
     painter.line(vec![at(24.0, 64.0), at(42.0, 82.0), at(76.0, 48.0)], Stroke::new(11.0 * size / 111.0, check));
+    mark
 }
 
 fn icon(icon: Icon, label: &str) -> String {
@@ -482,25 +483,56 @@ fn mono(size: f32) -> FontId {
     FontId::new(size, FontFamily::Monospace)
 }
 
-fn prose(ui: &mut egui::Ui, tones: &Tones, text: &str) {
-    for block in text.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") })) {
-        let mut lines = block.lines().peekable();
-        if let Some(heading) = lines.peek().and_then(|line| line.strip_prefix("# ")) {
-            ui.add_space(6.0);
-            ui.label(RichText::new(heading).font(bold(14.0)).color(tones.strong));
-            lines.next();
-        }
-        let body = lines.collect::<Vec<_>>().join("\n");
-        if !body.trim().is_empty() {
-            ui.label(RichText::new(body).size(14.5).color(tones.text));
-        }
-        ui.add_space(6.0);
+/// One run of prose as laid-out text: file paths, routes, calls and constants are set in mono on a tint, the way backticks would.
+fn inline(tones: &Tones, text: &str) -> egui::text::LayoutJob {
+    static CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"`[^`]+`|[\w.-]+/[\w./-]*\.\w+(?::\d+)?|\B/[a-z][\w/:-]+|\b\w[\w-]+\.[a-z]{2,4}(?::\d+)?\b|\b[A-Za-z_][\w.]*\([^()\s]*\)|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[a-z]+_[a-z_]+\b").expect("a fixed pattern"));
+    let plain = egui::TextFormat { font_id: FontId::proportional(15.0), color: tones.text, line_height: Some(23.0), ..Default::default() };
+    let code = egui::TextFormat { font_id: mono(13.0), color: tones.strong, background: tones.raised, ..plain.clone() };
+    let mut job = egui::text::LayoutJob::default();
+    let mut from = 0;
+    for found in CODE.find_iter(text) {
+        job.append(&text[from..found.start()], 0.0, plain.clone());
+        job.append(found.as_str().trim_matches('`'), 0.0, code.clone());
+        from = found.end();
     }
+    job.append(&text[from..], 0.0, plain);
+    job
+}
+
+fn prose(ui: &mut egui::Ui, tones: &Tones, text: &str) {
+    ui.scope(|ui| {
+        ui.set_max_width(680.0_f32.min(ui.available_width()));
+        for block in text.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") })) {
+            let mut lines = block.lines().peekable();
+            if let Some(heading) = lines.peek().and_then(|line| line.strip_prefix("# ")) {
+                ui.add_space(12.0);
+                ui.label(RichText::new(heading).font(bold(15.0)).color(tones.strong));
+                ui.add_space(2.0);
+                lines.next();
+            }
+            for line in lines.filter(|line| !line.trim().is_empty()) {
+                let (mark, rest) = line.trim_start().split_once(' ').unwrap_or(("", line));
+                let listed = mark == "-" || mark == "*" || mark.strip_suffix('.').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+                if listed {
+                    ui.horizontal_top(|ui| {
+                        ui.add_sized([22.0, 23.0], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).font(mono(13.0)).color(tones.dim)));
+                        ui.label(inline(tones, rest));
+                    });
+                } else {
+                    ui.label(inline(tones, line));
+                }
+            }
+            ui.add_space(8.0);
+        }
+    });
 }
 
 fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Response {
     let (fill, ink) = if on { (tones.accent, tones.on_accent) } else { (tones.raised, tones.strong) };
-    ui.add(egui::Button::new(RichText::new(label).font(bold(13.0)).color(ink)).fill(fill).stroke(Stroke::new(1.0, if on { tones.accent } else { tones.text })).corner_radius(0.0))
+    let tight = std::mem::replace(&mut ui.spacing_mut().button_padding, egui::vec2(12.0, 7.0));
+    let made = ui.add(egui::Button::new(RichText::new(label).font(bold(14.0)).color(ink)).fill(fill).stroke(Stroke::new(1.0, if on { tones.accent } else { tones.text })).corner_radius(0.0));
+    ui.spacing_mut().button_padding = tight;
+    made
 }
 
 impl eframe::App for App {
@@ -570,7 +602,7 @@ impl eframe::App for App {
                     ui.set_max_width(680.0);
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.horizontal(|ui| {
-                            logo(ui, 26.0);
+                            let _ = logo(ui, 26.0);
                             ui.label(RichText::new("revui").font(serif(24.0)).color(tones.strong));
                         });
                         ui.add_space(14.0);
@@ -663,6 +695,7 @@ impl eframe::App for App {
             open.publish = Some((0, open.data.preview.clone()));
         }
         let mut marked: Option<(String, &str)> = None;
+        let mut home = false;
         if let Card::Item(n) = open.cards[open.at] {
             let id = open.data.review.items[n].id.clone();
             match (pressed(Key::A), pressed(Key::X)) {
@@ -674,7 +707,8 @@ impl eframe::App for App {
 
         egui::Panel::top("bar").frame(frame.inner_margin(egui::Margin::symmetric(16, 9))).show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                logo(ui, 20.0);
+                ui.set_min_height(34.0);
+                home = logo(ui, 20.0).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Your reviews (q)").clicked();
                 ui.label(RichText::new(&open.data.review.title).font(serif(16.0)).color(tones.strong));
                 ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1060,6 +1094,9 @@ impl eframe::App for App {
             if let Err(problem) = open.mark(&id, verdict) {
                 self.problem = problem;
             }
+        }
+        if home {
+            self.list();
         }
     }
 }

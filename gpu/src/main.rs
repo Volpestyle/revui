@@ -30,7 +30,15 @@ struct Item {
     title: String,
     body: String,
     section: Option<usize>,
+    at: Option<At>,
     evidence: Vec<Evidence>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+struct At {
+    file: String,
+    line: u32,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -100,7 +108,30 @@ enum Card {
     Summary,
     Part(usize),
     Item(usize),
+    Note(usize),
     Loose,
+}
+
+type Painted = Vec<Vec<(Color32, String)>>;
+
+/// A hunk's lines coloured by what the code is, in the theme the terminal viewer uses.
+fn paint(path: &str, lines: &[String]) -> Painted {
+    static LOADED: std::sync::OnceLock<(syntect::parsing::SyntaxSet, syntect::highlighting::Theme)> = std::sync::OnceLock::new();
+    let (syntaxes, theme) = LOADED.get_or_init(|| (two_face::syntax::extra_newlines(), two_face::theme::extra().get(two_face::theme::EmbeddedThemeName::TwoDark).clone()));
+    let kind = std::path::Path::new(path).extension().and_then(|kind| kind.to_str()).unwrap_or("");
+    let syntax = syntaxes.find_syntax_by_extension(kind).unwrap_or_else(|| syntaxes.find_syntax_plain_text());
+    let mut state = syntect::easy::HighlightLines::new(syntax, theme);
+    let plain = |code: &str| vec![(Color32::from_white_alpha(200), code.to_string())];
+    lines
+        .iter()
+        .map(|line| {
+            let code = format!("{}\n", line.get(1..).unwrap_or(""));
+            match state.highlight_line(&code, syntaxes) {
+                Ok(spans) => spans.into_iter().map(|(style, text)| (Color32::from_rgb(style.foreground.r, style.foreground.g, style.foreground.b), text.trim_end_matches('\n').to_string())).collect(),
+                Err(_) => plain(code.trim_end_matches('\n')),
+            }
+        })
+        .collect()
 }
 
 /// The colours of the page, for the appearance the system is in.
@@ -157,6 +188,7 @@ struct Open {
     compose: bool,
     publish: Option<(usize, String)>,
     note: String,
+    painted: std::collections::HashMap<(usize, usize), Painted>,
 }
 
 impl Open {
@@ -168,11 +200,12 @@ impl Open {
             cards.extend(data.review.items.iter().enumerate().filter(|(_, item)| item.section == Some(part)).map(|(n, _)| Card::Item(n)));
         }
         cards.extend(data.review.items.iter().enumerate().filter(|(_, item)| item.section.is_none_or(|part| part >= data.review.sections.len())).map(|(n, _)| Card::Item(n)));
+        cards.extend(data.state["notes"].as_array().into_iter().flatten().enumerate().filter(|(_, note)| note["posted"] != true).map(|(n, _)| Card::Note(n)));
         if data.groups.len() > data.review.sections.len() {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new() })
+        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default() })
     }
 
     fn group(&self) -> Option<usize> {
@@ -180,6 +213,11 @@ impl Open {
             Card::Summary => None,
             Card::Part(part) => Some(part),
             Card::Item(n) => self.data.review.items[n].section,
+            Card::Note(n) => {
+                let note = &self.data.state["notes"][n];
+                let file = note["file"].as_str().or_else(|| self.data.review.items.iter().find(|item| Some(item.id.as_str()) == note["item"].as_str()).and_then(|item| item.at.as_ref().map(|at| at.file.as_str())));
+                file.and_then(|file| self.data.groups.iter().position(|group| group.iter().any(|&(f, _)| self.data.files[f].path == file)))
+            }
             Card::Loose => Some(self.data.review.sections.len()),
         }
         .filter(|group| *group < self.data.groups.len())
@@ -190,7 +228,17 @@ impl Open {
             Card::Summary => "Summary".into(),
             Card::Part(part) => format!("{}. {}", part + 1, self.data.review.sections[part].title),
             Card::Item(n) => format!("{} {}", self.data.review.items[n].id, self.data.review.items[n].title),
+            Card::Note(n) => self.about(n),
             Card::Loose => "Code in no part".into(),
+        }
+    }
+
+    fn about(&self, n: usize) -> String {
+        let note = &self.data.state["notes"][n];
+        match (note["file"].as_str(), note["line"].as_u64(), note["item"].as_str()) {
+            (Some(file), Some(line), _) => format!("Your comment on {file}:{line}"),
+            (_, _, Some(item)) => format!("Your comment on {item}"),
+            _ => "Your comment on the whole merge request".into(),
         }
     }
 
@@ -329,7 +377,7 @@ fn artifact(ui: &mut egui::Ui, dir: &str, path: &str) {
     let full = std::path::Path::new(dir).join(path);
     let shown = matches!(full.extension().and_then(|kind| kind.to_str()), Some("png" | "jpg" | "jpeg" | "gif" | "webp"));
     match shown {
-        true => drop(ui.add(egui::Image::new(format!("file://{}", full.display())).max_width(ui.available_width()).corner_radius(0.0))),
+        true => drop(ui.add(egui::Image::new(format!("file://{}", full.display())).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(0.0))),
         false => drop(ui.hyperlink_to(format!("Open {path}"), format!("file://{}", full.display()))),
     }
 }
@@ -518,15 +566,16 @@ impl eframe::App for App {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     let mut last = usize::MAX;
                     let mut row = 0;
-                    for &(file, hunk) in &open.data.groups[group] {
-                        let (shown, hunk) = (&open.data.files[file], &open.data.files[file].hunks[hunk]);
+                    for &(file, hunk_at) in &open.data.groups[group] {
+                        let (shown, hunk) = (&open.data.files[file], &open.data.files[file].hunks[hunk_at]);
+                        let painted = open.painted.entry((file, hunk_at)).or_insert_with(|| paint(&shown.path, &hunk.lines));
                         if file != last {
                             egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| ui.label(RichText::new(&shown.path).font(mono(13.0)).color(Color32::WHITE).strong()));
                             last = file;
                         }
                         egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 4)).show(ui, |ui| ui.label(RichText::new(&hunk.header).font(mono(11.0)).color(Color32::from_white_alpha(120))));
                         let (mut old, mut new) = (hunk.old_start, hunk.new_start);
-                        for line in &hunk.lines {
+                        for (nth, line) in hunk.lines.iter().enumerate() {
                             let sign = line.chars().next().unwrap_or(' ');
                             let number = if sign == '-' { old } else { new };
                             match sign {
@@ -552,7 +601,13 @@ impl eframe::App for App {
                                         '-' => Color32::from_rgb(240, 120, 125),
                                         _ => ink,
                                     }));
-                                    ui.label(RichText::new(line.get(1..).unwrap_or("")).font(mono(12.5)).color(ink));
+                                    let mut code = egui::text::LayoutJob::default();
+                                    for (color, text) in &painted[nth] {
+                                        let color = if sign == '-' { color.gamma_multiply(0.6) } else if sign == '+' { *color } else { color.gamma_multiply(0.75) };
+                                        code.append(text, 0.0, egui::TextFormat { font_id: mono(12.5), color, ..Default::default() });
+                                    }
+                                    let _ = ink;
+                                    ui.add(egui::Label::new(code).extend());
                                 });
                             });
                             if under && open.moved {
@@ -649,6 +704,21 @@ impl eframe::App for App {
                         ui.label(RichText::new(&section.tier).font(mono(11.5)).color(tones.dim));
                         ui.add_space(10.0);
                         prose(ui, &tones, &section.why);
+                    }
+                    Card::Note(n) => {
+                        let text = open.data.state["notes"][n]["text"].as_str().unwrap_or("").to_string();
+                        ui.label(RichText::new(open.about(n)).font(serif(25.0)).color(tones.strong));
+                        ui.add_space(10.0);
+                        prose(ui, &tones, &text);
+                        if button(ui, &tones, "Delete this comment", false).clicked() {
+                            let mut state = open.data.state.clone();
+                            if let Some(notes) = state["notes"].as_array_mut() {
+                                notes.remove(n);
+                            }
+                            if let Err(problem) = open.save(state) {
+                                open.note = problem;
+                            }
+                        }
                     }
                     Card::Loose => {
                         ui.label(RichText::new("Code in no part").font(serif(25.0)).color(tones.strong));

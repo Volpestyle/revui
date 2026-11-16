@@ -11,3 +11,5 @@ png = "0.18.1"
 regex = "1.13.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }

@@ -106,9 +106,10 @@ impl Play {
                 }
             }
             _ => {
-                let (held, named) = match (entry.strip_prefix("Cmd+"), entry.strip_prefix("Shift+")) {
-                    (Some(named), _) => (egui::Modifiers::COMMAND | egui::Modifiers::MAC_CMD, named),
-                    (_, Some(named)) => (egui::Modifiers::SHIFT, named),
+                let (held, named) = match (entry.strip_prefix("Cmd+Shift+"), entry.strip_prefix("Cmd+"), entry.strip_prefix("Shift+")) {
+                    (Some(named), ..) => (egui::Modifiers::COMMAND | egui::Modifiers::MAC_CMD | egui::Modifiers::SHIFT, named),
+                    (_, Some(named), _) => (egui::Modifiers::COMMAND | egui::Modifiers::MAC_CMD, named),
+                    (.., Some(named)) => (egui::Modifiers::SHIFT, named),
                     _ => (egui::Modifiers::NONE, entry.as_str()),
                 };
                 if !held.is_none() {

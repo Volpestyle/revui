@@ -619,15 +619,15 @@ fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
                 fx::touch(ui, made, tones.text).on_hover_text(hint).clicked()
             };
             open.agent = !small(ui, Icon::X, "Close (Cmd-J)");
-            open.minimized = small(ui, Icon::Minus, "Minimize to the bottom bar");
-            let (other, hint) = if open.floating { (Icon::PanelRight, "Dock to the side") } else { (Icon::PictureInPicture2, "Detach: a panel you can move and resize") };
+            open.minimized = small(ui, Icon::Minus, "Minimize to the bottom bar (Cmd-Shift-M)");
+            let (other, hint) = if open.floating { (Icon::PanelRight, "Dock to the side (Cmd-Shift-D)") } else { (Icon::PictureInPicture2, "Detach: a panel you can move and resize (Cmd-Shift-D)") };
             open.floating ^= small(ui, other, hint);
         });
     });
     ui.add_space(6.0);
     egui::ScrollArea::vertical().auto_shrink(false).max_height((ui.available_height() - 136.0).max(80.0)).stick_to_bottom(true).show(ui, |ui| {
         if open.chat.log.is_empty() {
-            ui.label(RichText::new("This review's agent. It wrote the guide, so it already knows the change. Ask it about the card you are on.").size(13.0).color(tones.dim));
+            ui.label(RichText::new("This review's agent. It wrote the guide, so it already knows the change. Ask it about the card you are on.\n\nCmd-J opens and closes it, Cmd-Shift-M minimizes it to the bottom bar, Cmd-Shift-D pulls it out or docks it.").size(13.0).color(tones.dim));
         }
         for said in &open.chat.log {
             match said {
@@ -855,12 +855,19 @@ impl eframe::App for App {
         if pressed(Key::T) {
             (open.agent, open.minimized, open.ask) = (true, false, true);
         }
-        if ctx.input(|input| input.modifiers.command && input.key_pressed(Key::J)) {
+        let chord = |key: Key| ctx.input(|input| input.modifiers.command && input.modifiers.shift && input.key_pressed(key));
+        if ctx.input(|input| input.modifiers.command && !input.modifiers.shift && input.key_pressed(Key::J)) {
             (open.agent, open.minimized) = (!open.agent || open.minimized, false);
         }
         if pressed(Key::V) && !shift {
             open.agent = true;
             open.tell(&ctx, "verify", "");
+        }
+        if chord(Key::M) && open.agent {
+            open.minimized ^= true;
+        }
+        if chord(Key::D) {
+            (open.agent, open.minimized, open.floating) = (true, false, !open.floating || !open.agent || open.minimized);
         }
         if pressed(Key::I) {
             open.agent = true;
@@ -915,7 +922,7 @@ impl eframe::App for App {
                 if open.agent && open.minimized {
                     let name = format!("{}  Agent{}", Icon::Bot.unicode(), if open.chat.busy { " · working" } else { "" });
                     let chip = ui.add(egui::Button::new(RichText::new(name).font(bold(12.5)).color(tones.on_accent)).fill(tones.accent).corner_radius(0.0));
-                    if fx::touch(ui, chip, tones.on_accent).on_hover_text("Restore the agent (Cmd-J)").clicked() {
+                    if fx::touch(ui, chip, tones.on_accent).on_hover_text("Restore the agent (Cmd-J or Cmd-Shift-M)").clicked() {
                         open.minimized = false;
                     }
                 }

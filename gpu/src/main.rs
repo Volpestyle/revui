@@ -1,4 +1,5 @@
 mod chat;
+mod fx;
 mod host;
 mod map;
 mod play;
@@ -467,6 +468,7 @@ impl App {
         fonts.font_data.insert("lucide".into(), std::sync::Arc::new(egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES)));
         fonts.families.values_mut().for_each(|family| family.push("lucide".into()));
         egui_extras::install_image_loaders(&cc.egui_ctx);
+        fx::install(cc);
         cc.egui_ctx.set_fonts(fonts);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
         let named = host::named();
@@ -604,7 +606,7 @@ fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Resp
     let tight = std::mem::replace(&mut ui.spacing_mut().button_padding, egui::vec2(12.0, 7.0));
     let made = ui.add(egui::Button::new(RichText::new(label).font(bold(14.0)).color(ink)).fill(fill).stroke(Stroke::new(1.0, if on { tones.accent } else { tones.text })).corner_radius(0.0));
     ui.spacing_mut().button_padding = tight;
-    made
+    fx::touch(ui, made, ink)
 }
 
 /// The review's agent: what was said, the box to ask in, and the controls that detach, minimize and close it.
@@ -612,7 +614,10 @@ fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Agent").font(mono(13.0)).color(tones.strong).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let small = |ui: &mut egui::Ui, icon: Icon, hint: &str| ui.add(egui::Button::new(RichText::new(icon.unicode().to_string()).size(15.0).color(tones.text)).frame(false)).on_hover_text(hint).clicked();
+            let small = |ui: &mut egui::Ui, icon: Icon, hint: &str| {
+                let made = ui.add(egui::Button::new(RichText::new(icon.unicode().to_string()).size(15.0).color(tones.text)).frame(false));
+                fx::touch(ui, made, tones.text).on_hover_text(hint).clicked()
+            };
             open.agent = !small(ui, Icon::X, "Close (Cmd-J)");
             open.minimized = small(ui, Icon::Minus, "Minimize to the bottom bar");
             let (other, hint) = if open.floating { (Icon::PanelRight, "Dock to the side") } else { (Icon::PictureInPicture2, "Detach: a panel you can move and resize") };
@@ -682,6 +687,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let tones = tones(ui.visuals().dark_mode);
         let ctx = ui.ctx().clone();
+        fx::begin();
         self.play.draw(&ctx);
         let middle = ui.max_rect().center();
         if self.dressed != Some(ui.visuals().dark_mode) {
@@ -697,6 +703,7 @@ impl eframe::App for App {
             visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, tones.line);
             visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, tones.text);
             visuals.override_text_color = Some(tones.text);
+            visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
             ctx.set_visuals(visuals);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -765,7 +772,7 @@ impl eframe::App for App {
                                     ui.label(RichText::new(if past.title.is_empty() { &past.dir } else { &past.title }).size(14.5).color(tones.strong));
                                     ui.label(RichText::new(about).size(12.0).color(tones.dim));
                                 });
-                                if row.response.interact(egui::Sense::click()).clicked() {
+                                if fx::touch(ui, row.response.interact(egui::Sense::click()), tones.strong).clicked() {
                                     pick = Some(past.dir.clone());
                                 }
                             }
@@ -838,6 +845,11 @@ impl eframe::App for App {
                 let count = open.data.review.items[n].evidence.len().max(1);
                 (open.proof, open.moved) = ((open.proof + if shift { count - 1 } else { 1 }) % count, true);
             }
+            if let (true, Card::Item(n)) = (pressed(Key::Enter) || pressed(Key::O), open.cards[open.at]) {
+                if let Some(path) = open.data.review.items[n].evidence.get(open.proof).and_then(|evidence| evidence.path.as_ref()) {
+                    host::open(&open.dir, path);
+                }
+            }
         }
         open.compose |= pressed(Key::C);
         if pressed(Key::T) {
@@ -849,11 +861,6 @@ impl eframe::App for App {
         if pressed(Key::V) && !shift {
             open.agent = true;
             open.tell(&ctx, "verify", "");
-            if let (true, Card::Item(n)) = (pressed(Key::Enter) || pressed(Key::O), open.cards[open.at]) {
-                if let Some(path) = open.data.review.items[n].evidence.get(open.proof).and_then(|evidence| evidence.path.as_ref()) {
-                    host::open(&open.dir, path);
-                }
-            }
         }
         if pressed(Key::I) {
             open.agent = true;
@@ -896,6 +903,10 @@ impl eframe::App for App {
                     }
                 });
             });
+            if open.chat.busy {
+                let edge = ui.clip_rect();
+                fx::shimmer(ui, egui::Rect::from_min_max(egui::pos2(edge.left(), edge.bottom() - 2.0), edge.max), tones.accent);
+            }
         });
         egui::Panel::bottom("keys").frame(frame.inner_margin(egui::Margin::symmetric(14, 5))).show_inside(ui, |ui| {
             let here = if open.in_diff { "j k line · V select lines · c comment on them · tab next panel" } else { "j k scroll · e evidence · enter open it · a agree · x dismiss · c comment · tab next panel" };
@@ -903,7 +914,8 @@ impl eframe::App for App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if open.agent && open.minimized {
                     let name = format!("{}  Agent{}", Icon::Bot.unicode(), if open.chat.busy { " · working" } else { "" });
-                    if ui.add(egui::Button::new(RichText::new(name).font(bold(12.5)).color(tones.on_accent)).fill(tones.accent).corner_radius(0.0)).on_hover_text("Restore the agent (Cmd-J)").clicked() {
+                    let chip = ui.add(egui::Button::new(RichText::new(name).font(bold(12.5)).color(tones.on_accent)).fill(tones.accent).corner_radius(0.0));
+                    if fx::touch(ui, chip, tones.on_accent).on_hover_text("Restore the agent (Cmd-J)").clicked() {
                         open.minimized = false;
                     }
                 }
@@ -1006,212 +1018,218 @@ impl eframe::App for App {
             };
             area.show(ui, |ui| {
                 ui.scroll_with_delta(egui::vec2(0.0, -glide.0));
-                ui.set_max_width(760.0_f32.min(ui.available_width()));
-                match open.cards[open.at] {
-                    Card::Summary => {
-                        let review = &open.data.review;
-                        egui::Frame::new().fill(INK).inner_margin(egui::Margin::symmetric(30, 24)).show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.label(RichText::new(&review.title).font(serif(25.0)).color(Color32::WHITE));
-                            ui.add_space(14.0);
-                            let lines = |sign: char| open.data.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
-                            let stats = [(review.sections.len().to_string(), "parts"), (review.items.iter().filter(|item| item.kind == "finding").count().to_string(), "findings"), (review.items.iter().filter(|item| item.kind == "decision").count().to_string(), "decisions"), (open.data.files.len().to_string(), "files"), (format!("+{} −{}", lines('+'), lines('-')), "lines")];
-                            ui.columns(stats.len(), |columns| {
-                                for (column, (value, name)) in columns.iter_mut().zip(&stats) {
-                                    column.add(egui::Label::new(RichText::new(value).font(serif(26.0)).color(Color32::WHITE)).extend());
-                                    column.label(RichText::new(*name).size(12.5).color(ON_INK.gamma_multiply(0.6)));
-                                }
+                let mut column = ui.available_rect_before_wrap();
+                column.min.x += ((column.width() - 760.0) / 2.0).max(0.0);
+                column.max.x = column.max.x.min(column.min.x + 760.0);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
+                    let arrived = fx::arrive(ui.ctx(), open.at);
+                    ui.set_opacity(arrived);
+                    ui.add_space((1.0 - arrived) * 10.0);
+                    match open.cards[open.at] {
+                        Card::Summary => {
+                            let review = &open.data.review;
+                            let slab = egui::Frame::new().fill(INK).inner_margin(egui::Margin::symmetric(30, 24)).show(ui, |ui| {
+                                let under = ui.painter().add(egui::Shape::Noop);
+                                ui.set_width(ui.available_width());
+                                ui.label(RichText::new(&review.title).font(serif(25.0)).color(Color32::WHITE));
+                                ui.add_space(14.0);
+                                let lines = |sign: char| open.data.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
+                                let stats = [(review.sections.len().to_string(), "parts"), (review.items.iter().filter(|item| item.kind == "finding").count().to_string(), "findings"), (review.items.iter().filter(|item| item.kind == "decision").count().to_string(), "decisions"), (open.data.files.len().to_string(), "files"), (format!("+{} −{}", lines('+'), lines('-')), "lines")];
+                                ui.columns(stats.len(), |columns| {
+                                    for (column, (value, name)) in columns.iter_mut().zip(&stats) {
+                                        column.add(egui::Label::new(RichText::new(value).font(serif(26.0)).color(Color32::WHITE)).extend());
+                                        column.label(RichText::new(*name).size(12.5).color(ON_INK.gamma_multiply(0.6)));
+                                    }
+                                });
+                                under
                             });
-                        });
-                        ui.add_space(18.0);
-                        if open.data.product && !review.plain.trim().is_empty() {
-                            prose(ui, &tones, &links, &review.plain);
-                            ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
-                        }
-                        prose(ui, &tones, &links, &review.summary);
-                        ui.separator();
-                        ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
-                        ui.add_space(6.0);
-                        let own = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| host::text(&open.dir, &std::path::Path::new(path).with_extension("mmd").to_string_lossy()));
-                        let (source, touched) = match (&own, &open.data.system) {
-                            (Some(text), _) => (text.as_str(), None),
-                            (None, Some(system)) => (system.text.as_str(), Some(&system.touched)),
-                            _ => ("", None),
-                        };
-                        let (mut nodes, edges) = map::parse(source);
-                        if let Some(touched) = touched {
-                            nodes.iter_mut().for_each(|node| node.state = touched.contains_key(&node.id).then_some("changed"));
-                        }
-                        let caption = match (&review.map, touched) {
-                            (Some(map), None) => map.caption.clone(),
-                            _ => {
-                                let hit: Vec<&str> = nodes.iter().filter(|node| node.state.is_some()).map(|node| node.label.as_str()).collect();
-                                format!("Touches {} of {} parts of the system: {}", hit.len(), nodes.len(), hit.join(", "))
+                            fx::flow(ui, slab.inner, slab.response.rect, Color32::from_rgb(154, 158, 242));
+                            ui.add_space(18.0);
+                            if open.data.product && !review.plain.trim().is_empty() {
+                                prose(ui, &tones, &links, &review.plain);
+                                ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
                             }
-                        };
-                        egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.line)).inner_margin(14.0).show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            if nodes.len() >= 2 {
+                            prose(ui, &tones, &links, &review.summary);
+                            ui.separator();
+                            ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
+                            ui.add_space(6.0);
+                            let own = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| host::text(&open.dir, &std::path::Path::new(path).with_extension("mmd").to_string_lossy()));
+                            let (source, touched) = match (&own, &open.data.system) {
+                                (Some(text), _) => (text.as_str(), None),
+                                (None, Some(system)) => (system.text.as_str(), Some(&system.touched)),
+                                _ => ("", None),
+                            };
+                            let (mut nodes, edges) = map::parse(source);
+                            if let Some(touched) = touched {
+                                nodes.iter_mut().for_each(|node| node.state = touched.contains_key(&node.id).then_some("changed"));
+                            }
+                            let caption = match (&review.map, touched) {
+                                (Some(map), None) => map.caption.clone(),
+                                _ => {
+                                    let hit: Vec<&str> = nodes.iter().filter(|node| node.state.is_some()).map(|node| node.label.as_str()).collect();
+                                    format!("Touches {} of {} parts of the system: {}", hit.len(), nodes.len(), hit.join(", "))
+                                }
+                            };
+                            egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.line)).inner_margin(14.0).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
                                 let look = map::Look { raised: tones.raised, top: tones.line.gamma_multiply(0.8), side: tones.line, edge: tones.dim, text: tones.strong };
-                                map::draw(ui, &look, &nodes, &edges);
-                                ui.label(RichText::new(caption).font(bold(13.5)).color(tones.strong));
-                                if let Some(text) = review.map.as_ref().and_then(|map| map.text.as_ref()).filter(|_| touched.is_none()) {
-                                    ui.label(RichText::new(text).size(13.0).color(tones.text));
+                                if nodes.len() >= 2 {
+                                    map::draw(ui, &look, &nodes, &edges);
+                                    ui.label(RichText::new(caption).font(bold(13.5)).color(tones.strong));
+                                    if let Some(text) = review.map.as_ref().and_then(|map| map.text.as_ref()).filter(|_| touched.is_none()) {
+                                        ui.label(RichText::new(text).size(13.0).color(tones.text));
+                                    }
+                                } else if let Some(path) = review.map.as_ref().and_then(|map| map.path.as_ref()) {
+                                    artifact(ui, &open.dir, path);
+                                } else {
+                                    let paths: Vec<Vec<&str>> = open.data.files.iter().map(|file| file.path.split('/').collect()).collect();
+                                    let shared = (0..).take_while(|&n| !paths.is_empty() && paths.iter().all(|parts| parts.len() > n + 1 && parts[n] == paths[0][n])).count();
+                                    let mut places: std::collections::BTreeMap<&str, usize> = Default::default();
+                                    for (file, parts) in open.data.files.iter().zip(&paths) {
+                                        *places.entry(parts[shared]).or_default() += file.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(['+', '-'])).count();
+                                    }
+                                    let mut landed: Vec<map::Node> = places.iter().map(|(name, lines)| map::Node { id: name.to_string(), label: format!("{name} · {lines}"), form: map::Form::Block, state: Some("changed") }).collect();
+                                    landed.sort_by_key(|node| std::cmp::Reverse(places[node.id.as_str()]));
+                                    let more = landed.len().saturating_sub(8);
+                                    landed.truncate(8);
+                                    map::draw(ui, &look, &landed, &[]);
+                                    let inside = if shared == 0 { String::new() } else { format!(" in {}", paths[0][..shared].join("/")) };
+                                    let rest = if more == 0 { String::new() } else { format!(", and {more} more places") };
+                                    ui.label(RichText::new(format!("Where the change lands{inside}, by lines changed{rest}. There is no map of this system yet: ask the agent to draw one, and every review of this repo starts from it.")).size(13.0).color(tones.dim));
                                 }
-                            } else if let Some(path) = review.map.as_ref().and_then(|map| map.path.as_ref()) {
-                                artifact(ui, &open.dir, path);
-                            } else {
-                                let mut folders: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
-                                for file in &open.data.files {
-                                    let row = folders.entry(file.path.split_once('/').map_or(".", |(folder, _)| folder)).or_default();
-                                    let count = |sign: char| file.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
-                                    *row = (row.0 + count('+'), row.1 + count('-'));
-                                }
-                                let most = folders.values().map(|(added, removed)| added + removed).max().unwrap_or(1).max(1) as f32;
-                                for (folder, (added, removed)) in &folders {
-                                    ui.horizontal(|ui| {
-                                        ui.add_sized([120.0, 16.0], egui::Label::new(RichText::new(*folder).font(mono(12.0)).color(tones.strong)).halign(egui::Align::Min));
-                                        let wide = (ui.available_width() - 130.0).max(40.0);
-                                        let (bar, _) = ui.allocate_exact_size(egui::vec2(wide, 10.0), egui::Sense::hover());
-                                        let green = bar.width() * *added as f32 / most;
-                                        ui.painter().rect_filled(egui::Rect::from_min_size(bar.min, egui::vec2(green, 10.0)), 0.0, Color32::from_rgb(47, 143, 85));
-                                        ui.painter().rect_filled(egui::Rect::from_min_size(bar.min + egui::vec2(green, 0.0), egui::vec2(bar.width() * *removed as f32 / most, 10.0)), 0.0, Color32::from_rgb(194, 71, 77));
-                                        ui.label(RichText::new(format!("+{added} −{removed}")).size(12.0).color(tones.dim));
-                                    });
-                                }
-                            }
-                        });
-                        ui.add_space(14.0);
-                        ui.label(RichText::new("Read in this order").font(bold(14.0)).color(tones.strong));
-                        for (part, section) in review.sections.iter().enumerate() {
-                            ui.label(RichText::new(format!("{:02}  {}", part + 1, section.title)).font(bold(14.5)).color(tones.strong));
-                        }
-                    }
-                    Card::Part(part) => {
-                        let section = &open.data.review.sections[part];
-                        ui.label(RichText::new(&section.title).font(serif(25.0)).color(tones.strong));
-                        ui.label(RichText::new(&section.tier).font(mono(11.5)).color(tones.dim));
-                        ui.add_space(10.0);
-                        prose(ui, &tones, &links, &section.why);
-                    }
-                    Card::Thread(n) => {
-                        let thread = open.data.threads[n].clone();
-                        ui.label(RichText::new(open.said(n)).font(serif(25.0)).color(tones.strong));
-                        ui.label(RichText::new(if thread.resolved { "resolved · already on the merge request" } else { "already on the merge request" }).font(mono(11.5)).color(tones.dim));
-                        for (who, body, when) in &thread.notes {
-                            ui.add_space(10.0);
-                            ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(bold(13.0)).color(tones.strong));
-                            prose(ui, &tones, &links, body);
-                        }
-                    }
-                    Card::Note(n) => {
-                        let text = open.data.state["notes"][n]["text"].as_str().unwrap_or("").to_string();
-                        ui.label(RichText::new(open.about(n)).font(serif(25.0)).color(tones.strong));
-                        ui.add_space(10.0);
-                        prose(ui, &tones, &links, &text);
-                        if button(ui, &tones, &icon(Icon::Trash2, "Delete this comment"), false).clicked() {
-                            let mut state = open.data.state.clone();
-                            if let Some(notes) = state["notes"].as_array_mut() {
-                                notes.remove(n);
-                            }
-                            if let Err(problem) = open.save(state) {
-                                open.note = problem;
-                            }
-                        }
-                    }
-                    Card::Loose => {
-                        ui.label(RichText::new("Code in no part").font(serif(25.0)).color(tones.strong));
-                        prose(ui, &tones, &links, "These hunks are in the diff, but the guide put them in no section. Nothing vouches for them: read them.");
-                    }
-                    Card::Item(n) => {
-                        let item = open.data.review.items[n].clone();
-                        let verdict = open.verdict(&item.id).map(String::from);
-                        ui.horizontal(|ui| {
-                            let kind = if item.kind == "finding" && !item.severity.is_empty() { &item.severity } else { &item.kind };
-                            egui::Frame::new().fill(if item.severity == "blocker" { tones.rust } else { tones.raised }).stroke(Stroke::new(1.0, tones.rust)).inner_margin(egui::Margin::symmetric(7, 2)).show(ui, |ui| {
-                                ui.label(RichText::new(kind).font(bold(12.0)).color(if item.severity == "blocker" { Color32::WHITE } else { tones.rust }))
                             });
-                            ui.label(RichText::new(&item.id).font(mono(11.5)).color(tones.dim));
-                        });
-                        ui.label(RichText::new(&item.title).font(serif(25.0)).color(tones.strong));
-                        ui.add_space(8.0);
-                        if item.kind != "good" {
+                            ui.add_space(14.0);
+                            ui.label(RichText::new("Read in this order").font(bold(14.0)).color(tones.strong));
+                            for (part, section) in review.sections.iter().enumerate() {
+                                ui.label(RichText::new(format!("{:02}  {}", part + 1, section.title)).font(bold(14.5)).color(tones.strong));
+                            }
+                        }
+                        Card::Part(part) => {
+                            let section = &open.data.review.sections[part];
+                            ui.label(RichText::new(&section.title).font(serif(25.0)).color(tones.strong));
+                            ui.label(RichText::new(&section.tier).font(mono(11.5)).color(tones.dim));
+                            ui.add_space(10.0);
+                            prose(ui, &tones, &links, &section.why);
+                        }
+                        Card::Thread(n) => {
+                            let thread = open.data.threads[n].clone();
+                            ui.label(RichText::new(open.said(n)).font(serif(25.0)).color(tones.strong));
+                            ui.label(RichText::new(if thread.resolved { "resolved · already on the merge request" } else { "already on the merge request" }).font(mono(11.5)).color(tones.dim));
+                            for (who, body, when) in &thread.notes {
+                                ui.add_space(10.0);
+                                ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(bold(13.0)).color(tones.strong));
+                                prose(ui, &tones, &links, body);
+                            }
+                        }
+                        Card::Note(n) => {
+                            let text = open.data.state["notes"][n]["text"].as_str().unwrap_or("").to_string();
+                            ui.label(RichText::new(open.about(n)).font(serif(25.0)).color(tones.strong));
+                            ui.add_space(10.0);
+                            prose(ui, &tones, &links, &text);
+                            if button(ui, &tones, &icon(Icon::Trash2, "Delete this comment"), false).clicked() {
+                                let mut state = open.data.state.clone();
+                                if let Some(notes) = state["notes"].as_array_mut() {
+                                    notes.remove(n);
+                                }
+                                if let Err(problem) = open.save(state) {
+                                    open.note = problem;
+                                }
+                            }
+                        }
+                        Card::Loose => {
+                            ui.label(RichText::new("Code in no part").font(serif(25.0)).color(tones.strong));
+                            prose(ui, &tones, &links, "These hunks are in the diff, but the guide put them in no section. Nothing vouches for them: read them.");
+                        }
+                        Card::Item(n) => {
+                            let item = open.data.review.items[n].clone();
+                            let verdict = open.verdict(&item.id).map(String::from);
                             ui.horizontal(|ui| {
-                                if button(ui, &tones, &icon(Icon::Check, "Agree"), verdict.as_deref() == Some("agree")).clicked() {
-                                    marked = Some((item.id.clone(), "agree"));
-                                }
-                                if button(ui, &tones, &icon(Icon::X, "Dismiss"), verdict.as_deref() == Some("dismiss")).clicked() {
-                                    marked = Some((item.id.clone(), "dismiss"));
-                                }
-                                if verdict.is_some() {
-                                    let quoted = open.data.quoted.get(&item.id).copied().unwrap_or(false);
-                                    ui.label(RichText::new(if quoted { "goes out quoted" } else { "only your comment goes out" }).size(12.0).color(tones.dim));
-                                    if button(ui, &tones, &icon(Icon::Quote, "Quote it"), quoted).clicked() {
-                                        let mut state = open.data.state.clone();
-                                        state["quotes"][&item.id] = (!quoted).into();
-                                        if let Err(problem) = open.save(state) {
-                                            open.note = problem;
+                                let kind = if item.kind == "finding" && !item.severity.is_empty() { &item.severity } else { &item.kind };
+                                egui::Frame::new().fill(if item.severity == "blocker" { tones.rust } else { tones.raised }).stroke(Stroke::new(1.0, tones.rust)).inner_margin(egui::Margin::symmetric(7, 2)).show(ui, |ui| {
+                                    ui.label(RichText::new(kind).font(bold(12.0)).color(if item.severity == "blocker" { Color32::WHITE } else { tones.rust }))
+                                });
+                                ui.label(RichText::new(&item.id).font(mono(11.5)).color(tones.dim));
+                            });
+                            ui.label(RichText::new(&item.title).font(serif(25.0)).color(tones.strong));
+                            ui.add_space(8.0);
+                            if item.kind != "good" {
+                                ui.horizontal(|ui| {
+                                    if button(ui, &tones, &icon(Icon::Check, "Agree"), verdict.as_deref() == Some("agree")).clicked() {
+                                        marked = Some((item.id.clone(), "agree"));
+                                    }
+                                    if button(ui, &tones, &icon(Icon::X, "Dismiss"), verdict.as_deref() == Some("dismiss")).clicked() {
+                                        marked = Some((item.id.clone(), "dismiss"));
+                                    }
+                                    if verdict.is_some() {
+                                        let quoted = open.data.quoted.get(&item.id).copied().unwrap_or(false);
+                                        ui.label(RichText::new(if quoted { "goes out quoted" } else { "only your comment goes out" }).size(12.0).color(tones.dim));
+                                        if button(ui, &tones, &icon(Icon::Quote, "Quote it"), quoted).clicked() {
+                                            let mut state = open.data.state.clone();
+                                            state["quotes"][&item.id] = (!quoted).into();
+                                            if let Err(problem) = open.save(state) {
+                                                open.note = problem;
+                                            }
                                         }
                                     }
-                                }
-                            });
-                        }
-                        ui.add_space(10.0);
-                        if open.data.product && !item.plain.trim().is_empty() {
-                            prose(ui, &tones, &links, &item.plain);
-                            ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
-                        }
-                        prose(ui, &tones, &links, &item.body);
-                        ui.separator();
-                        ui.label(RichText::new(format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() })).font(bold(14.0)).color(tones.strong));
-                        for (n, evidence) in item.evidence.iter().enumerate() {
-                            ui.add_space(8.0);
-                            let current = !open.in_diff && n == open.proof;
-                            let proof = egui::Frame::new().fill(INK).stroke(Stroke::new(if current { 2.0 } else { 0.0 }, tones.rust)).inner_margin(14.0).show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(format!("evidence.{}", n + 1)).font(mono(11.5)).color(ON_INK.gamma_multiply(0.6)));
-                                    ui.label(RichText::new(&evidence.provenance).font(mono(12.0)).color(ON_INK));
                                 });
-                                ui.label(RichText::new(&evidence.caption).font(bold(14.0)).color(Color32::WHITE));
-                                if let Some(path) = &evidence.path {
-                                    artifact(ui, &open.dir, path);
+                            }
+                            ui.add_space(10.0);
+                            if open.data.product && !item.plain.trim().is_empty() {
+                                prose(ui, &tones, &links, &item.plain);
+                                ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
+                            }
+                            prose(ui, &tones, &links, &item.body);
+                            ui.separator();
+                            ui.label(RichText::new(format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() })).font(bold(14.0)).color(tones.strong));
+                            for (n, evidence) in item.evidence.iter().enumerate() {
+                                ui.add_space(8.0);
+                                let current = !open.in_diff && n == open.proof;
+                                let proof = egui::Frame::new().fill(INK).stroke(Stroke::new(if current { 2.0 } else { 0.0 }, tones.rust)).inner_margin(14.0).show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(format!("evidence.{}", n + 1)).font(mono(11.5)).color(ON_INK.gamma_multiply(0.6)));
+                                        ui.label(RichText::new(&evidence.provenance).font(mono(12.0)).color(ON_INK));
+                                    });
+                                    ui.label(RichText::new(&evidence.caption).font(bold(14.0)).color(Color32::WHITE));
+                                    if let Some(path) = &evidence.path {
+                                        artifact(ui, &open.dir, path);
+                                    }
+                                    if let Some(text) = evidence.text.as_ref().filter(|text| !text.trim().is_empty()) {
+                                        ui.label(RichText::new(text).font(mono(12.0)).color(ON_INK));
+                                    }
+                                });
+                                if current && open.moved {
+                                    proof.response.scroll_to_me(None);
                                 }
-                                if let Some(text) = evidence.text.as_ref().filter(|text| !text.trim().is_empty()) {
-                                    ui.label(RichText::new(text).font(mono(12.0)).color(ON_INK));
-                                }
-                            });
-                            if current && open.moved {
-                                proof.response.scroll_to_me(None);
                             }
                         }
                     }
-                }
-                ui.add_space(18.0);
-                let about = match (open.picked(), open.cards[open.at]) {
-                    (Some((file, line, _, Some(first))), _) => format!("Comment on {file}:{first}-{line}"),
-                    (Some((file, line, _, None)), _) => format!("Comment on {file}:{line}"),
-                    (None, Card::Item(n)) => format!("Comment on {}", open.data.review.items[n].id),
-                    (None, Card::Thread(_)) => "Reply in this thread".into(),
-                    _ => "Comment on the whole merge request".into(),
-                };
-                ui.label(RichText::new(about).font(bold(14.0)).color(tones.strong));
-                let field = ui.add(egui::TextEdit::multiline(&mut open.draft).desired_width(f32::INFINITY).desired_rows(3));
-                if std::mem::take(&mut open.compose) {
-                    field.request_focus();
-                    field.scroll_to_me(None);
-                } else if open.leave {
-                    field.surrender_focus();
-                }
-                let sent = field.has_focus() && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
-                if sent {
-                    field.surrender_focus();
-                }
-                if button(ui, &tones, "Save comment", false).on_hover_text("Cmd-Enter").clicked() || sent {
-                    if let Err(problem) = open.comment() {
-                        open.note = problem;
+                    ui.add_space(18.0);
+                    let about = match (open.picked(), open.cards[open.at]) {
+                        (Some((file, line, _, Some(first))), _) => format!("Comment on {file}:{first}-{line}"),
+                        (Some((file, line, _, None)), _) => format!("Comment on {file}:{line}"),
+                        (None, Card::Item(n)) => format!("Comment on {}", open.data.review.items[n].id),
+                        (None, Card::Thread(_)) => "Reply in this thread".into(),
+                        _ => "Comment on the whole merge request".into(),
+                    };
+                    ui.label(RichText::new(about).font(bold(14.0)).color(tones.strong));
+                    let field = ui.add(egui::TextEdit::multiline(&mut open.draft).desired_width(f32::INFINITY).desired_rows(3));
+                    if std::mem::take(&mut open.compose) {
+                        field.request_focus();
+                        field.scroll_to_me(None);
+                    } else if open.leave {
+                        field.surrender_focus();
                     }
-                }
+                    let sent = field.has_focus() && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
+                    if sent {
+                        field.surrender_focus();
+                    }
+                    if button(ui, &tones, "Save comment", false).on_hover_text("Cmd-Enter").clicked() || sent {
+                        if let Err(problem) = open.comment() {
+                            open.note = problem;
+                        }
+                    }
+                });
             });
             bar(ui, !open.in_diff && !open.asking);
         });
@@ -1227,7 +1245,7 @@ impl eframe::App for App {
                 ui.set_width(680.0);
                 ui.label(RichText::new("This is exactly what goes to the merge request. Nothing is posted until you confirm.").color(tones.text));
                 for (n, how) in open.data.finish.iter().enumerate() {
-                    ui.radio_value(&mut choice, n, how);
+                    ui.radio_value(&mut choice, n, how).on_hover_cursor(egui::CursorIcon::PointingHand);
                 }
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| ui.add(egui::TextEdit::multiline(&mut text).font(mono(12.0)).desired_width(f32::INFINITY)));
                 ui.horizontal(|ui| {

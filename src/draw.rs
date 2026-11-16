@@ -47,8 +47,8 @@ pub(crate) fn hunk_lines(path: &str, hunk: &[String], highlight: bool) -> Vec<Li
     for text in hunk {
         let (sign, code) = text.split_at(text.len().min(1));
         let (mark, background) = match sign {
-            "+" => (Color::Green, Some(Color::Rgb(20, 46, 28))),
-            "-" => (Color::Red, Some(Color::Rgb(58, 22, 26))),
+            "+" => (GREEN, Some(Color::Rgb(20, 46, 28))),
+            "-" => (RED, Some(Color::Rgb(58, 22, 26))),
             _ => (Color::DarkGray, None),
         };
         let paint = |style: Style| background.map_or(style, |bg| style.bg(bg));
@@ -132,9 +132,9 @@ fn artifact_kind(path: &str) -> (&'static str, &'static str) {
 
 fn provenance(p: Provenance) -> Span<'static> {
     match p {
-        Provenance::Observed => Span::styled("observed", Style::new().fg(Color::Green)),
+        Provenance::Observed => Span::styled("observed", Style::new().fg(GREEN)),
         Provenance::Checked => Span::styled("verified", Style::new().fg(accent())),
-        Provenance::Inferred => Span::styled("reasoned", Style::new().fg(Color::Yellow)),
+        Provenance::Inferred => Span::styled("reasoned", Style::new().fg(YELLOW)),
     }
 }
 
@@ -151,7 +151,7 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
                     if sections.is_empty() {
                         Line::raw(format!(" {}", tail(app.panes.guide as usize - 4)))
                     } else {
-                        Line::styled(format!(" ⚠ {}  no section", tail(22)), Style::new().fg(Color::Yellow))
+                        Line::styled(format!(" ⚠ {}  no section", tail(22)), Style::new().fg(YELLOW))
                     }
                 }
             }
@@ -186,7 +186,7 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let note = &app.state.notes[i];
             let (sign, style) = match note.posted {
                 true => ("✓", Style::new().fg(Color::DarkGray)),
-                false => ("✎", Style::new().fg(Color::Yellow)),
+                false => ("✎", Style::new().fg(YELLOW)),
             };
             Line::from(vec![Span::styled(format!("   {sign} "), style), Span::styled(note.text.lines().next().unwrap_or("").to_string(), style)])
         }
@@ -194,18 +194,18 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let item = &app.bundle.review.items[i];
             let verdict = app.state.verdicts.get(&item.id).map(String::as_str);
             let mark = match verdict {
-                Some("agree") => Span::styled("   ✓ ", Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Some(_) => Span::styled("   ✗ ", Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Some("agree") => Span::styled("   ✓ ", Style::new().fg(GREEN).add_modifier(Modifier::BOLD)),
+                Some(_) => Span::styled("   ✗ ", Style::new().fg(RED).add_modifier(Modifier::BOLD)),
                 None => Span::styled("   · ", Style::new().fg(Color::DarkGray)),
             };
             let dismissed = verdict == Some("dismiss") && item.kind != Kind::Decision;
             let color = match (item.kind, item.severity.as_str()) {
-                (Kind::Decision, _) => Color::Blue,
-                (Kind::Good, _) => Color::Green,
-                (_, "fix") => Color::Rgb(255, 150, 70),
-                (_, "suggestion") => Color::Yellow,
-                (_, "question") => Color::Magenta,
-                _ => Color::Red,
+                (Kind::Decision, _) => BLUE,
+                (Kind::Good, _) => GREEN,
+                (_, "fix") => ORANGE,
+                (_, "suggestion") => YELLOW,
+                (_, "question") => MAGENTA,
+                _ => RED,
             };
             Line::from(vec![
                 mark,
@@ -246,10 +246,10 @@ pub fn rich(text: &str, base: Style) -> Vec<Span<'static>> {
         let line_ref = core.rsplit_once(':').is_some_and(|(file, line)| file.contains('.') && line.starts_with(|c: char| c.is_ascii_digit()));
         let path = core.contains('/') && core.rsplit('/').next().is_some_and(|name| name.contains('.'));
         if core.starts_with("http://") || core.starts_with("https://") {
-            spans.push(Span::styled(word.to_string(), base.fg(Color::LightBlue).add_modifier(Modifier::UNDERLINED)));
+            spans.push(Span::styled(word.to_string(), base.fg(BLUE).add_modifier(Modifier::UNDERLINED)));
         } else if let Some((start, end)) = ticket(word) {
             spans.push(Span::styled(word[..start].to_string(), base));
-            spans.push(Span::styled(word[start..end].to_string(), base.fg(Color::Magenta).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(word[start..end].to_string(), base.fg(MAGENTA).add_modifier(Modifier::BOLD)));
             spans.push(Span::styled(word[end..].to_string(), base));
         } else if core.len() > 1 && core.starts_with('!') && core[1..].bytes().all(|b| b.is_ascii_digit()) {
             spans.push(Span::styled(word.to_string(), base.fg(accent()).add_modifier(Modifier::BOLD)));
@@ -371,7 +371,7 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
             for reply in app.state.notes.iter().filter(|note| note.reply_to.as_ref() == Some(&thread.id)) {
                 paragraph(&mut rows, "", width, "", plain, None);
                 let state = if reply.posted { "you, posted" } else { "you, not posted yet" };
-                rows.push((Line::styled(state, Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)), None));
+                rows.push((Line::styled(state, Style::new().fg(YELLOW).add_modifier(Modifier::BOLD)), None));
                 paragraph(&mut rows, &reply.text, width, "  ", plain, None);
             }
             return rows;
@@ -407,7 +407,7 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
             let raised = bundle.review.items.iter().any(|item| item.section == Some(g));
             let color = match section.tier.as_str() {
                 "core" => accent(),
-                "supporting" => Color::Blue,
+                "supporting" => BLUE,
                 _ => Color::DarkGray,
             };
             let bold = plain.add_modifier(Modifier::BOLD);
@@ -433,18 +433,18 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
         return rows;
     };
     let (label, color) = match (item.kind, item.severity.as_str()) {
-        (Kind::Finding, "blocker") => ("Blocker", Color::Red),
-        (Kind::Finding, "fix" | "should fix") => ("Should fix", Color::Rgb(230, 140, 60)),
-        (Kind::Finding, "suggestion") => ("Suggestion", Color::Yellow),
-        (Kind::Finding, "question") => ("Question", Color::Magenta),
-        (Kind::Finding, _) => ("Finding", Color::Red),
-        (Kind::Decision, _) => ("Decision", Color::Blue),
-        (Kind::Good, _) => ("Good call", Color::Green),
+        (Kind::Finding, "blocker") => ("Blocker", RED),
+        (Kind::Finding, "fix" | "should fix") => ("Should fix", ORANGE),
+        (Kind::Finding, "suggestion") => ("Suggestion", YELLOW),
+        (Kind::Finding, "question") => ("Question", MAGENTA),
+        (Kind::Finding, _) => ("Finding", RED),
+        (Kind::Decision, _) => ("Decision", BLUE),
+        (Kind::Good, _) => ("Good call", GREEN),
     };
     let status = match item.status {
-        Some(Status::Confirmed) => Span::styled(" · confirmed by a run", Style::new().fg(Color::Green)),
-        Some(Status::Unreproduced) => Span::styled(" · checked, did not reproduce", Style::new().fg(Color::Yellow)),
-        Some(Status::Resolved) => Span::styled(" · fixed at this head", Style::new().fg(Color::Green)),
+        Some(Status::Confirmed) => Span::styled(" · confirmed by a run", Style::new().fg(GREEN)),
+        Some(Status::Unreproduced) => Span::styled(" · checked, did not reproduce", Style::new().fg(YELLOW)),
+        Some(Status::Resolved) => Span::styled(" · fixed at this head", Style::new().fg(GREEN)),
         None => Span::raw(""),
     };
     let bold = plain.add_modifier(Modifier::BOLD);
@@ -457,10 +457,10 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
         let idle = Style::new().fg(Color::Gray).bg(Color::Rgb(48, 54, 68));
         let on = |color: Color| Style::new().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD);
         let (yes_style, no_style, after) = match (verdict, decision) {
-            (Some("agree"), true) => (on(Color::Green), idle, "  not raised"),
-            (Some("agree"), false) => (on(Color::Green), idle, "  goes out when you publish"),
-            (Some(_), true) => (idle, on(Color::Red), "  goes out when you publish"),
-            (Some(_), false) => (idle, on(Color::Red), "  not raised"),
+            (Some("agree"), true) => (on(GREEN), idle, "  not raised"),
+            (Some("agree"), false) => (on(GREEN), idle, "  goes out when you publish"),
+            (Some(_), true) => (idle, on(RED), "  goes out when you publish"),
+            (Some(_), false) => (idle, on(RED), "  not raised"),
             (None, _) => (idle, idle, ""),
         };
         let commented = app.state.notes.iter().any(|note| !note.posted && note.item.as_ref() == Some(&item.id));
@@ -484,7 +484,7 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
     if !notes.is_empty() {
         section(&mut rows, "Your comments on it".into());
         for note in notes {
-            paragraph(&mut rows, &format!("✎ {}", note.text), width, "", Style::new().fg(Color::Yellow), None);
+            paragraph(&mut rows, &format!("✎ {}", note.text), width, "", Style::new().fg(YELLOW), None);
         }
     }
     if item.evidence.is_empty() {
@@ -497,7 +497,7 @@ pub(crate) fn detail(app: &App, width: usize) -> Rows {
         let selected = n == app.evidence;
         let cursor = if selected { "> " } else { "  " };
         let checked = app.checked.contains(&(item.id.clone(), n));
-        let picked = Span::styled(if checked { "  ✓" } else { "" }, Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let picked = Span::styled(if checked { "  ✓" } else { "" }, Style::new().fg(YELLOW).add_modifier(Modifier::BOLD));
         let picture = match &evidence.path {
             Some(path) => Span::styled(format!(" {}", artifact_kind(path).0), Style::new().fg(accent()).add_modifier(Modifier::BOLD)),
             None => Span::raw(""),
@@ -772,27 +772,27 @@ fn header(app: &App, width: u16) -> Vec<Line<'static>> {
             line.push(Span::styled(rest, dim));
             Line::from(line)
         }
-        (None, false) => Line::styled(format!(" {}", app.note), Style::new().fg(Color::Yellow)),
+        (None, false) => Line::styled(format!(" {}", app.note), Style::new().fg(YELLOW)),
     };
     let mut title = title;
     let lines = |sign: char| app.bundle.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
     let files = app.bundle.files.len();
     title.extend([
-        Span::styled(format!("  +{}", lines('+')), Style::new().fg(Color::Green)),
-        Span::styled(format!(" -{}", lines('-')), Style::new().fg(Color::Red)),
+        Span::styled(format!("  +{}", lines('+')), Style::new().fg(GREEN)),
+        Span::styled(format!(" -{}", lines('-')), Style::new().fg(RED)),
         Span::styled(format!(" · {files} file{}", if files == 1 { "" } else { "s" }), dim),
     ]);
     title.splice(1..1, [Span::styled(" ‹ ", Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD)), Span::raw(" ")]);
     let pending = app.state.notes.iter().filter(|note| !note.posted).count();
     match (&app.state.finished, pending) {
-        (Some(done), _) => title.push(Span::styled(format!("  ✓ review {}", done.how), Style::new().fg(Color::Green))),
+        (Some(done), _) => title.push(Span::styled(format!("  ✓ review {}", done.how), Style::new().fg(GREEN))),
         (None, 0) => {}
-        (None, n) => title.push(Span::styled(format!("  ✎ {n} unpublished"), Style::new().fg(Color::Yellow))),
+        (None, n) => title.push(Span::styled(format!("  ✎ {n} unpublished"), Style::new().fg(YELLOW))),
     }
     if app.bundle.successor.is_some() {
         let head = review.sources.first().map_or("", |s| s.head_sha.as_str());
         let warning = format!("  ⚠ guide is for an older head ({head:.8}) · g update");
-        title.push(Span::styled(warning, Style::new().fg(Color::Yellow)));
+        title.push(Span::styled(warning, Style::new().fg(YELLOW)));
     }
     let over = title.iter().map(|span| span.content.chars().count()).sum::<usize>().saturating_sub(width as usize);
     if let Some(name) = title.iter_mut().find(|span| span.content == review.title).filter(|_| over > 0) {
@@ -858,7 +858,7 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
     let contents = if app.item().is_some() { "" } else { " · b contents" };
     let actions = format!("{step}{here}{shown}{contents} · tab pane{tabs} · / commands · ? help");
     let [head, main, foot] = Layout::vertical([Constraint::Length(2), Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    let publish = [("p", "Publish review", KeyCode::Char('p'), Color::Green)];
+    let publish = [("p", "Publish review", KeyCode::Char('p'), GREEN)];
     let reserved = publish[0].1.chars().count() as u16 + 8;
     frame.render_widget(ratatui::text::Text::from(header(app, head.width.saturating_sub(reserved))), head);
     app.action_buttons = buttons(frame, Rect { height: 1.min(head.height), ..head }, &publish, false);
@@ -978,7 +978,7 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
     let keys: Vec<&str> = if picked == 0 { vec![] } else { vec![&count, "v verify", "i diagram"] };
     let style = match picked {
         0 => Style::new().fg(Color::DarkGray),
-        _ => Style::new().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+        _ => Style::new().fg(Color::Black).bg(YELLOW).add_modifier(Modifier::BOLD),
     };
     let hint = Line::styled(fit(&keys, text_area.width), style);
     let title = format!("{} ▾", app.card_title());
@@ -1099,7 +1099,7 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
         if outdated {
             let written = source.map_or("", |s| s.head_sha.as_str());
             let warning = format!("⚠ This guide was written for head {written:.8}. The merge request is now at {newer}.");
-            lines.extend(wrap(&warning, width).into_iter().map(|part| Line::styled(part, Style::new().fg(Color::Yellow))));
+            lines.extend(wrap(&warning, width).into_iter().map(|part| Line::styled(part, Style::new().fg(YELLOW))));
             lines.push(Line::raw(""));
             let explain = "Updating starts an agent run. It starts from this guide, reviews what changed since, and marks findings that are now fixed.";
             lines.extend(wrap(explain, width).into_iter().map(|part| Line::styled(part, dim)));
@@ -1107,14 +1107,14 @@ fn draw_review(app: &mut App, frame: &mut Frame) {
         } else {
             if !app.bundle.review.sections.is_empty() {
                 let warning = "⚠ This replaces the guide you are reading. The old one is kept as review.before.json. Your marks stay attached by id (F1, Q2), so check them afterwards.";
-                lines.extend(wrap(warning, width).into_iter().map(|part| Line::styled(part, Style::new().fg(Color::Yellow))));
+                lines.extend(wrap(warning, width).into_iter().map(|part| Line::styled(part, Style::new().fg(YELLOW))));
                 lines.push(Line::raw(""));
             }
             lines.extend([Line::styled("Starts an agent run: a few minutes, and it spends tokens.", dim), Line::raw("")]);
         }
         for (i, part) in wrap(&command.replace("$REVUI_URL", url).replace("$REVUI_CLAUDE", &mrs::claude()), width - 2).into_iter().enumerate() {
             let prompt = Span::styled(if i == 0 { "$ " } else { "  " }, dim);
-            lines.push(Line::from(vec![prompt, Span::styled(part, Style::new().fg(Color::Green))]));
+            lines.push(Line::from(vec![prompt, Span::styled(part, Style::new().fg(GREEN))]));
         }
         let buttons = match outdated {
             true => [("y", "Update the guide", KeyCode::Char('y')), ("n", "Keep reading this one", KeyCode::Char('n'))],
@@ -1415,8 +1415,8 @@ pub fn popup(frame: &mut Frame, title: &'static str, lines: Vec<Line>, buttons: 
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Color::Yellow))
-        .title(Span::styled(title, Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
+        .border_style(Style::new().fg(YELLOW))
+        .title(Span::styled(title, Style::new().fg(YELLOW).add_modifier(Modifier::BOLD)))
         .padding(Padding::new(2, 2, 1, 1));
     let inner = block.inner(area);
     *POPUP.lock().unwrap() = inner;
@@ -1426,7 +1426,7 @@ pub fn popup(frame: &mut Frame, title: &'static str, lines: Vec<Line>, buttons: 
     let mut x = inner.x;
     let y = inner.bottom().saturating_sub(1);
     for (i, &(key, label, code)) in buttons.iter().enumerate() {
-        let color = if i == 0 { Color::Green } else { Color::Gray };
+        let color = if i == 0 { GREEN } else { Color::Gray };
         let text = format!(" {key} · {label} ");
         let button = Rect::new(x, y, text.chars().count() as u16, 1).intersection(inner);
         frame.render_widget(Span::styled(text, Style::new().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)), button);
@@ -1436,14 +1436,23 @@ pub fn popup(frame: &mut Frame, title: &'static str, lines: Vec<Line>, buttons: 
     (inner, areas)
 }
 
-static ACCENT: std::sync::Mutex<Color> = std::sync::Mutex::new(Color::Cyan);
+/// The viewer's own colours: soft, fixed tones in place of the terminal's loud named ones. Greys stay the terminal's.
+pub const YELLOW: Color = Color::Rgb(214, 170, 96);
+pub const GREEN: Color = Color::Rgb(125, 168, 118);
+pub const RED: Color = Color::Rgb(208, 111, 130);
+pub const BLUE: Color = Color::Rgb(111, 159, 216);
+pub const MAGENTA: Color = Color::Rgb(160, 140, 205);
+pub const ORANGE: Color = Color::Rgb(217, 140, 95);
+const ACCENT_DEFAULT: Color = Color::Rgb(154, 158, 242);
+
+static ACCENT: std::sync::Mutex<Color> = std::sync::Mutex::new(ACCENT_DEFAULT);
 
 pub fn accent() -> Color {
     *ACCENT.lock().unwrap()
 }
 
 pub fn set_accent(name: &str) {
-    *ACCENT.lock().unwrap() = name.trim().parse().unwrap_or(Color::Cyan);
+    *ACCENT.lock().unwrap() = name.trim().parse().unwrap_or(ACCENT_DEFAULT);
 }
 
 pub fn spinner() -> Span<'static> {

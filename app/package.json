@@ -1,0 +1,19 @@
+{
+  "name": "revui-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sidecars": "sh sidecars.sh",
+    "dev": "sh sidecars.sh && tauri dev",
+    "build": "sh sidecars.sh && tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "bun": "^1.4.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "bun"
+    ]
+  }
+}

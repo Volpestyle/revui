@@ -7,7 +7,7 @@ function linked(text: string): ReactNode[] {
 }
 
 function Prose({ text }: { text: string }) {
-  const blocks = text.trim().split(/\n{2,}/)
+  const blocks = text.trim().split(/\n{2,}|\n(?=# )/)
   return (
     <div className="prose">
       {blocks.map((block, n) => {

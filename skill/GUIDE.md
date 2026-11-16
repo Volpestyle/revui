@@ -30,9 +30,9 @@ Write the outline to `review.json` in one go, as soon as you understand the shap
 
 ### The map
 
-Right after the outline is in the file, draw where this change sits, so the person sees the system before the findings. Set `working` to `Drawing the map` while you do. Skip it, and say nothing about it, for a change that stays inside one component and moves no call between components: a copy change, a rename, a fix inside one function.
+Right after the outline is in the file, draw where this change sits, so the person sees the system before the findings. Set `working` to `Drawing the map` while you do. Every guide has one: the summary never goes out without a picture of what the change touches. For a change that stays inside one component and moves no call between components (a copy change, a rename, a fix inside one function), draw that component with its direct neighbours, mark it changed, and say in the caption what changes inside it.
 
-1. `revui map "$dir"` prints where this repo's system map is kept and what it holds. It is Mermaid: the components (apps, services, stores, queues, the outside systems they talk to) and who calls whom, as the target branch has it. Ten to twenty nodes, and nothing as small as a file or a function.
+1. `revui map "$dir"` prints where this repo's system map is kept and what it holds. It is Mermaid: the components (apps, services, stores, queues, the outside systems they talk to) and who calls whom, as the target branch has it. Ten to twenty nodes, and nothing as small as a file or a function. Under the flowchart, one comment line per component names the folders it owns, as `%% api: services/api/, packages/api-client/` with the node's id first. The viewers read those lines to light up what a change touches before any guide is written, so every folder that holds code belongs to a component.
 2. None yet: draw it from the code and save it at that path. Every later review of this repo starts from it, so take the care once. One there already: check only the part this change touches against the code, and correct what is wrong.
 3. Never put this change into the system map. It describes the target branch, and this change may not merge.
 4. Copy the components this change touches, and their direct neighbours, into `assets/map.mmd`, and mark what the change does to them:
@@ -49,7 +49,7 @@ Right after the outline is in the file, draw where this change sits, so the pers
 
 5. `revui diagram assets/map.mmd assets/map.png`, then set `map` in `review.json`: `provenance` `inferred`, `path` `assets/map.png`, a `caption` of one sentence saying what moves, and as `text` what changes at each marked place, numbered, in the order the parts are read.
 
-If the diagram cannot be rendered here, leave `map` out and go on: the review does not wait for it.
+If the diagram cannot be rendered here, leave `map` out and go on: the review does not wait for it, and the page then shows the folders the change touches, drawn from the diff.
 
 ## 3. Review part by part, one finding at a time
 

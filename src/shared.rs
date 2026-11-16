@@ -235,6 +235,24 @@ pub fn cached_threads(bundle: &Bundle) -> Option<Conversation> {
 }
 
 /// Everything another front end needs to show a review: the guide, the diff, the reviewer's marks and what would go out.
+/// The repo's system map and how many of this change's files land in each component. The map's `%% id: folder/, folder/`
+/// lines say which folders a component owns; a file counts for the component with the longest folder it sits under.
+fn system(bundle: &Bundle) -> Option<serde_json::Value> {
+    let text = mrs::system_map(&bundle.review.sources.first().filter(|source| !source.repo.is_empty())?.repo)?;
+    let owned = |line: &str| {
+        let (id, folders) = line.trim().strip_prefix("%%")?.split_once(':')?;
+        Some(folders.split(',').map(|folder| (id.trim().to_string(), folder.trim().to_string())).filter(|(_, folder)| !folder.is_empty()).collect::<Vec<_>>())
+    };
+    let owns: Vec<(String, String)> = text.lines().filter_map(owned).flatten().collect();
+    let mut touched: BTreeMap<&str, usize> = BTreeMap::new();
+    for file in &bundle.files {
+        if let Some((id, _)) = owns.iter().filter(|(_, folder)| file.path.starts_with(folder.as_str())).max_by_key(|(_, folder)| folder.len()) {
+            *touched.entry(id.as_str()).or_default() += 1;
+        }
+    }
+    Some(serde_json::json!({ "text": text, "touched": touched }))
+}
+
 pub fn json(bundle: &Bundle) -> String {
     let state = bundle.load_state();
     let review = &bundle.review;
@@ -253,6 +271,7 @@ pub fn json(bundle: &Bundle) -> String {
     let (ok, report) = bundle.check();
     let outgoing = points(bundle, &state).len();
     serde_json::json!({
+        "system": system(bundle),
         "dir": bundle.dir,
         "review": review,
         "files": bundle.files,

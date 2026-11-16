@@ -595,7 +595,7 @@ impl App {
                 let here = (file.path.as_str(), if removed { old_line } else { new_line }, removed);
                 let noted = mine.iter().any(|(path, from, to, old)| *path == here.0 && *old == here.2 && (*from..=*to).contains(&here.1));
                 let marker = match (noted, theirs.contains(&here)) {
-                    (true, _) => Some(Color::Yellow),
+                    (true, _) => Some(crate::draw::YELLOW),
                     (_, true) => Some(accent()),
                     _ => None,
                 };
@@ -609,7 +609,7 @@ impl App {
                         span.style = span.style.bg(Color::Rgb(84, 72, 24));
                     }
                     if let Some(sign) = line.spans.first_mut() {
-                        sign.style = sign.style.fg(Color::Yellow);
+                        sign.style = sign.style.fg(crate::draw::YELLOW);
                     }
                 }
                 for row in wrap_code(line, self.diff_width as usize) {
@@ -1789,6 +1789,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         (Some("format"), _) => return Ok(print!("{}", include_str!("../FORMAT.md"))),
         (Some("fetch"), Some(url)) => return Ok(println!("{}", mrs::fetch(url)?.display())),
+        (Some("list"), _) => return Ok(println!("{}", mrs::list())),
         (Some("queue"), _) => {
             let (waiting, problems) = mrs::queue();
             for (url, dir, guide) in waiting {
@@ -1947,6 +1948,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui <dir>             open a bundle\n\
                  revui <dir> --export    print the reviewer's verdicts\n\
                  revui fetch <mr url>    create the bundle for a merge request, print its directory\n\
+                 revui list              print every review here as JSON, the latest first, for another front end\n\
                  revui queue             list the merge requests waiting for your review, and make their bundles\n\
                  revui prepare [mr url]  write the guides those are missing, or that one's, with no one watching\n\
                  revui hunks <dir>       list the diff's files and hunk indexes\n\

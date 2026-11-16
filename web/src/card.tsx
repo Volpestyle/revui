@@ -9,6 +9,7 @@ import type { RefObject } from "react"
 import { place } from "./cards.ts"
 import type { Card } from "./cards.ts"
 import type { Line } from "./diff.tsx"
+import { SystemMap } from "./map.tsx"
 import { Prose } from "./text.tsx"
 import type { Data, Evidence, Item, Note, State } from "./types.ts"
 
@@ -18,6 +19,7 @@ type Props = {
   picked?: Line
   comment: RefObject<HTMLTextAreaElement | null>
   go: (key: string) => void
+  draw?: () => void
   save: (change: (state: State) => void) => void
 }
 
@@ -90,29 +92,17 @@ function Proof({ evidence, n }: { evidence: Evidence; n: number }) {
   )
 }
 
-function Ramp({ data }: { data: Data }) {
-  const count = (group: number, sign: string) => data.groups[group].reduce((sum, [file, hunk]) => sum + data.files[file].hunks[hunk].lines.filter((line) => line.startsWith(sign)).length, 0)
-  const parts = data.groups.map((_, group) => ({ added: count(group, "+"), removed: count(group, "-") }))
-  const most = Math.max(1, ...parts.map((part) => part.added + part.removed))
-  const total = (key: "added" | "removed") => parts.reduce((sum, part) => sum + part[key], 0)
+function Stats({ data }: { data: Data }) {
+  const lines = (sign: string) => data.files.reduce((sum, file) => sum + file.hunks.reduce((sum, hunk) => sum + hunk.lines.filter((line) => line.startsWith(sign)).length, 0), 0)
   return (
     <>
-      <div className="ramp" aria-hidden>
-        {parts.map((part, group) => {
-          const share = (part.added + part.removed) / most
-          return <i key={group} style={{ height: `${Math.max(4, share * 100)}%`, opacity: 0.3 + share * 0.7 }} />
-        })}
-      </div>
-      <p className="readout">
-        <span>Lines changed / part</span>
-        <b>+{total("added")} −{total("removed")}</b>
-      </p>
       <dl className="stats">
         {[
           [data.review.sections.length, "parts"],
           [data.review.items.filter((item) => item.kind === "finding").length, "findings"],
           [data.review.items.filter((item) => item.kind === "decision").length, "decisions"],
           [data.files.length, "files"],
+          [`+${lines("+")} −${lines("-")}`, "lines"],
         ].map(([value, name]) => (
           <div key={name}>
             <dt>{name}</dt>
@@ -124,23 +114,69 @@ function Ramp({ data }: { data: Data }) {
   )
 }
 
-function Summary({ data, go }: Pick<Props, "data" | "go">) {
+/** Where the change lands, from the diff alone: the folders it touches, how much, and which parts read them. Shown when the guide drew no map. */
+function Lands({ data }: { data: Data }) {
+  const touched = data.files.map((file, fi) => {
+    const lines = file.hunks.flatMap((hunk) => hunk.lines)
+    const parts = data.groups.flatMap((group, g) => (group.some(([f]) => f === fi) && g < data.review.sections.length ? [g + 1] : []))
+    return { folders: file.path.split("/").slice(0, -1), added: lines.filter((line) => line.startsWith("+")).length, removed: lines.filter((line) => line.startsWith("-")).length, parts }
+  })
+  const rowsAt = (depth: number) => {
+    const rows = new Map<string, { added: number; removed: number; files: number; parts: Set<number> }>()
+    for (const file of touched) {
+      const key = file.folders.slice(0, depth).join("/") || "."
+      const row = rows.get(key) ?? { added: 0, removed: 0, files: 0, parts: new Set<number>() }
+      rows.set(key, { added: row.added + file.added, removed: row.removed + file.removed, files: row.files + 1, parts: new Set([...row.parts, ...file.parts]) })
+    }
+    return [...rows].sort((a, b) => b[1].added + b[1].removed - (a[1].added + a[1].removed))
+  }
+  const deepest = Math.max(1, ...touched.map((file) => file.folders.length))
+  const depth = [...Array(deepest).keys()].map((n) => n + 1).findLast((depth) => rowsAt(depth).length <= 8) ?? 1
+  const rows = rowsAt(depth)
+  const most = Math.max(1, ...rows.map(([, row]) => row.added + row.removed))
+  return (
+    <ul className="lands">
+      {rows.map(([folder, row]) => (
+        <li key={folder}>
+          <code>{folder}</code>
+          <span className="weight" aria-hidden>
+            <i data-sign="+" style={{ width: `${(row.added / most) * 100}%` }} />
+            <i data-sign="-" style={{ width: `${(row.removed / most) * 100}%` }} />
+          </span>
+          <span className="hint">
+            +{row.added} −{row.removed} · {row.files} file{row.files === 1 ? "" : "s"}
+            {row.parts.size > 0 && ` · part ${[...row.parts].join(", ")}`}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function Summary({ data, go, draw }: Pick<Props, "data" | "go" | "draw">) {
   const { review } = data
   const lead = data.product && review.plain.trim()
   return (
     <>
       <div className="hero">
         <h1>{review.title}</h1>
-        <Ramp data={data} />
+        <Stats data={data} />
       </div>
       {lead && <Prose text={review.plain} />}
       {lead && <h2>In detail</h2>}
       <Prose text={review.summary} />
-      {review.map && (
-        <>
-          <h2>Where it sits</h2>
-          <ul className="proofs"><Proof evidence={review.map} n={0} /></ul>
-        </>
+      <h2>Where it sits</h2>
+      {review.map ? (
+        <SystemMap evidence={review.map} fallback={<ul className="proofs"><Proof evidence={review.map} n={0} /></ul>} />
+      ) : data.system ? (
+        <SystemMap system={data.system} fallback={<Lands data={data} />} />
+      ) : (
+        data.files.length > 0 && <Lands data={data} />
+      )}
+      {!review.map && !data.system && draw && (
+        <p className="hint">
+          This repo has no system map yet. Drawn once, it shows where every review lands. <button type="button" className="link" onClick={draw}>Have the agent draw it</button>
+        </p>
       )}
       <h2>Read in this order</h2>
       <p className="hint">The guide splits the diff into parts, the core of the change first. A finding sits under the part whose code it is about, so a part with none had nothing to raise.</p>
@@ -265,7 +301,7 @@ function Finding({ data, item, picked, comment, save }: Omit<Props, "card" | "go
   )
 }
 
-function CardView({ data, card, picked, comment, go, save }: Props) {
+function CardView({ data, card, picked, comment, go, draw, save }: Props) {
   const add = (note: Partial<Note>) => (text: string) =>
     save((state) => {
       state.notes.push({ ...blank, ...note, text })
@@ -276,7 +312,7 @@ function CardView({ data, card, picked, comment, go, save }: Props) {
     case "summary":
       return (
         <>
-          <Summary data={data} go={go} />
+          <Summary data={data} go={go} draw={draw} />
           <Compose input={comment} title="Comment on the whole merge request" onSave={add({})} />
         </>
       )

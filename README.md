@@ -59,6 +59,17 @@ Two things it will not do:
 - **Post for you.** Only what you agreed with, pushed back on or wrote yourself
   goes out, and only when you publish.
 
+## In a window
+
+<p align="center"><img src="docs/app.gif" alt="revui as a Mac app: the list of reviews, a summary with a map of the system, a finding beside its diff, a comment on a line, and the publish preview" width="900"></p>
+
+The same review as a page, with the same keys. `revui web <link>` serves it in your browser, and the Mac app puts it in a window with the list of your reviews. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
+
+    revui web <link>                          # in a browser; --no-agent inside Herdr, Orca or Cursor
+    cd app && pnpm install && pnpm build      # the Mac app, from a checkout
+
+[web/README.md](web/README.md) has the details.
+
 ## With an agent
 
 Each review has one agent, in a tab. It writes the review, and it is the one you ask afterwards, so it already knows the change. These are real

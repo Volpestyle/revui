@@ -10,9 +10,7 @@
   You check what matters, and publish your own review.
 </p>
 
-<p align="center">
-  <img src="docs/demo.gif" alt="A tour of revui" width="900">
-</p>
+https://github.com/user-attachments/assets/d3760f03-63f3-49e9-87cb-4804cf29262b
 
 ## Quick start
 
@@ -61,12 +59,15 @@ Two things it will not do:
 
 ## In a window
 
-<p align="center"><img src="docs/app.gif" alt="revui as a Mac app: the list of reviews, a summary with a map of the system, a finding beside its diff, a comment on a line, and the publish preview" width="900"></p>
+https://github.com/user-attachments/assets/9777191b-646e-4f5d-935b-09ff214c0149
 
-The same review as a page, with the same keys. `revui web <link>` serves it in your browser, and the Mac app puts it in a window with the list of your reviews. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
+The same review as a page, with the same keys. The Mac app puts it in a window with the list of your reviews, and carries everything it needs. `revui web <link>` serves the page in your browser instead. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
 
-    revui web <link>                          # in a browser; --no-agent inside Herdr, Orca or Cursor
-    cd app && pnpm install && pnpm build      # the Mac app, from a checkout
+Both are built from a checkout of this repo for now: the released binary cannot run `revui web`, which also needs Node, and the app is not in the releases yet.
+
+    cd app && pnpm install && pnpm build                                # the Mac app
+    cargo install --path . && (cd web && pnpm install && pnpm build)    # once, for revui web
+    revui web <link>                                                    # --no-agent inside Herdr, Orca or Cursor
 
 [web/README.md](web/README.md) has the details.
 
@@ -79,19 +80,19 @@ runs against a small demo project, sped up where the badge says so.
 
 **Paste a link.** The agent reviews the merge request and writes as it goes: the summary and the parts first, then each finding the moment it has one. `g` does the same for a review that has no guide yet.
 
-<p align="center"><img src="docs/generate.gif" alt="Pasting a pull request link: the agent reviews it and the cards arrive" width="900"></p>
+https://github.com/user-attachments/assets/db0c578d-f2c5-4297-8176-1e11b26e1390
 
 **Ask about what you are looking at.** `t` goes to the agent, already told which finding you are on. `ctrl-q` switches between the review and the agent.
 
-<p align="center"><img src="docs/ask.gif" alt="Asking the agent about a finding, then switching between the agent and editor tabs" width="900"></p>
+https://github.com/user-attachments/assets/d4d42fc1-cff1-40e6-bbba-4b965c959d45
 
 **Have a finding reproduced.** `v` asks the agent to run it, off your screen. The first time that needs the product running, the agent asks where: a local stack or a preview deploy for the change, staging or production (read only) for how things are today. It remembers the answer for that repo. Here it starts the project's own server, drops the first response, and confirms that one checkout creates two orders.
 
-<p align="center"><img src="docs/verify.gif" alt="The agent reproducing a finding locally and marking it confirmed" width="900"></p>
+https://github.com/user-attachments/assets/9749bb18-5c02-401a-beaa-2140f330ef93
 
 **Ask for a diagram.** `i` has the agent draw one that explains a finding, without running anything. It shows beside the code. What a run showed (output, a screenshot, a recording) comes from `v`, and a finding can carry both.
 
-<p align="center"><img src="docs/artifact.gif" alt="The agent drawing a sequence diagram for a finding" width="900"></p>
+https://github.com/user-attachments/assets/7d95c89e-b2ea-4b46-8de1-e846889c5336
 
 ## A review, start to finish
 
@@ -183,19 +184,19 @@ revui's own tabs need nothing set up. Inside an app that has its own chat, panes
 
 **Cursor.** `t` hands the finding to Cursor's own chat, and `o` opens the change in Cursor's diff. `d` hides revui's diff pane, since the editor is right there.
 
-<p align="center"><img src="docs/in-cursor.gif" alt="revui in Cursor's terminal: the finding goes to Cursor's chat, and the change opens in Cursor's diff" width="900"></p>
+https://github.com/user-attachments/assets/d78a3e39-aff0-4c76-9a5d-83d31e1cd7eb
 
 **Orca.** `v` starts a native Orca chat that reproduces the finding and shows the page in Orca's browser, beside the chat. `o` opens the file in an Orca tab.
 
-<p align="center"><img src="docs/in-orca.gif" alt="revui in Orca: an Orca chat verifies a finding and shows the result in Orca's browser" width="900"></p>
+https://github.com/user-attachments/assets/8ee486ca-e4ee-4e5a-adbb-9dea72776c7c
 
 **Herdr.** The agent opens in a split pane beside the review, and shows what it ran in Herdr's browser.
 
-<p align="center"><img src="docs/in-herdr.gif" alt="revui in Herdr: the agent in a split pane, the orders page in Herdr's browser" width="900"></p>
+https://github.com/user-attachments/assets/4b8be399-284e-4696-b97a-98c791edee8b
 
 **Ghostty.** Pictures draw inline at full resolution. The agent can stay in revui's tabs, or open in a Ghostty split, as here.
 
-<p align="center"><img src="docs/in-ghostty.gif" alt="revui in Ghostty: the agent draws a diagram in a split, and it appears beside the finding" width="900"></p>
+https://github.com/user-attachments/assets/7ec04a0f-743d-43d5-a06a-386639fdde8c
 
 ## Configuration
 

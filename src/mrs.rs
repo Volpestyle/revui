@@ -190,6 +190,63 @@ pub fn map_report(bundle: &Path) -> Result<String, String> {
     Ok(format!("System map of {repo} ({}):\n{holds}\n", kept.display()))
 }
 
+/// Where the code of `repo` is under `root`: the folder at that path, else the checkout whose remote is that repo,
+/// else `root` itself, for the agent to find its way from.
+fn checkout_under(root: &Path, repo: &str) -> PathBuf {
+    if !repo.is_empty() && root.join(repo).is_dir() {
+        return root.join(repo);
+    }
+    let wanted = repo.to_lowercase();
+    let is_it = |url: &str| url.trim_end_matches('/').trim_end_matches(".git").strip_suffix(&wanted).is_some_and(|before| before.ends_with(['/', ':']));
+    let mut level = vec![root.to_path_buf()];
+    // ponytail: four folders down and no further, so a home folder as the root stays quick; a checkout nested deeper needs a nearer root.
+    for _ in 0..4 {
+        let mut next = Vec::new();
+        for entry in level.iter().flat_map(|dir| fs::read_dir(dir).into_iter().flatten().flatten()) {
+            let (path, name) = (entry.path(), entry.file_name().to_string_lossy().into_owned());
+            if name.starts_with('.') || ["node_modules", "target", "Library"].contains(&name.as_str()) || !path.is_dir() {
+                continue;
+            }
+            match fs::read_to_string(path.join(".git/config")) {
+                Ok(git) if !wanted.is_empty() && git.to_lowercase().lines().filter_map(|line| line.trim().strip_prefix("url = ")).any(is_it) => return path,
+                Ok(_) => {}
+                Err(_) => next.push(path),
+            }
+        }
+        level = next;
+    }
+    root.to_path_buf()
+}
+
+/// `revui checkout <dir> [root]`: the folder that review's agent starts in. The folder your code is kept under is
+/// remembered beside the bundles the first time it is given; each repo is then found under it.
+pub fn checkout(bundle: &Path, root: Option<&str>) -> Result<String, String> {
+    let kept = data_dir().join("code");
+    if let Some(root) = root {
+        fs::create_dir_all(data_dir()).and_then(|_| fs::write(&kept, root)).map_err(|e| format!("{}: {e}", kept.display()))?;
+    }
+    let root = fs::read_to_string(&kept).map(|root| PathBuf::from(root.trim())).ok().filter(|root| root.is_dir());
+    let root = root.ok_or("where your code is kept is not known yet: revui checkout <dir> <the folder your checkouts are under>")?;
+    let repo = Bundle::load(bundle).ok().and_then(|bundle| bundle.review.sources.first().map(|source| source.repo.clone())).unwrap_or_default();
+    Ok(checkout_under(&root, &repo).display().to_string())
+}
+
+#[cfg(test)]
+#[test]
+fn a_repo_is_found_under_the_folder_code_is_kept_in() {
+    let root = std::env::temp_dir().join(format!("revui-checkout-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let (plain, cloned) = (root.join("group/api"), root.join("work/elsewhere"));
+    fs::create_dir_all(&plain).unwrap();
+    fs::create_dir_all(cloned.join(".git")).unwrap();
+    fs::write(cloned.join(".git/config"), "[remote \"origin\"]\n\turl = git@github.com:Shop/Web.git\n").unwrap();
+    assert_eq!(checkout_under(&root, "group/api"), plain);
+    assert_eq!(checkout_under(&root, "shop/web"), cloned);
+    assert_eq!(checkout_under(&root, "op/web"), root);
+    assert_eq!(checkout_under(&root, ""), root);
+    let _ = fs::remove_dir_all(&root);
+}
+
 fn config() -> Config {
     fs::read_to_string(config_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }

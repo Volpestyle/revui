@@ -304,7 +304,8 @@ impl Open {
         }
     }
 
-    /// Where a new agent starts: where another review of the same repo ran its agent, or the folder the person picks.
+    /// Where a new agent starts: where another review of the same repo ran its agent, else the repo as `revui checkout`
+    /// finds it under the folder the person keeps their code in, which they are asked for once.
     fn folder(&self) -> Option<String> {
         let all: Vec<Past> = revui(&["list"], None).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
         let repo = all.iter().find(|past| past.dir == self.dir).map(|past| past.repo.clone()).unwrap_or_default();
@@ -312,7 +313,10 @@ impl Open {
         #[cfg(target_arch = "wasm32")]
         return known.or(Some(String::new()));
         #[cfg(not(target_arch = "wasm32"))]
-        known.or_else(|| rfd::FileDialog::new().set_title(format!("Where is your checkout of {}? The agent starts there.", if repo.is_empty() { "this code" } else { &repo })).pick_folder().map(|folder| folder.to_string_lossy().into_owned()))
+        known.or_else(|| revui(&["checkout", &self.dir], None).ok()).or_else(|| {
+            let root = rfd::FileDialog::new().set_title("Where do you keep your code? Pick the folder your checkouts are under: revui finds each repo there.").pick_folder()?;
+            revui(&["checkout", &self.dir, &root.to_string_lossy()], None).ok()
+        }).map(|found| found.trim().to_string())
     }
 
     /// Tells the agent: a question typed in ask mode, or the verify or artifact request for the card shown.

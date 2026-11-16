@@ -25,7 +25,9 @@ on [wgpu](https://wgpu.rs), runs as a Mac app and, compiled to WebAssembly, in a
 One agent per review, the one the terminal viewer uses: the session is kept in the
 bundle's `session.json`. In the app each message is one run of the `claude` command your
 config names, so it may do what that command is set up to allow, and nothing asks you in
-between. In a browser there is no process to start: Ask, Verify and Diagram go to an agent
+between. It starts in the review's repo: the app asks once for the folder your code is kept
+under, and `revui checkout` finds each repo there, or starts the agent in that folder to
+find its own way. In a browser there is no process to start: Ask, Verify and Diagram go to an agent
 in a pane of the app the page sits in (tmux, Herdr, Orca, Cursor), through `revui agent`.
 
 ## Checking and recording it

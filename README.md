@@ -59,7 +59,7 @@ Two things it will not do:
 
 ## In a window
 
-https://github.com/user-attachments/assets/534b0b71-8dda-4266-9128-d76498f9e393
+https://github.com/user-attachments/assets/9777191b-646e-4f5d-935b-09ff214c0149
 
 The same review as a page, with the same keys. The Mac app puts it in a window with the list of your reviews, and carries everything it needs. `revui web <link>` serves the page in your browser instead. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
 

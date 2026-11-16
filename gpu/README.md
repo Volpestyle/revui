@@ -27,7 +27,14 @@ bundle's `session.json`. In the app each message is one run of the `claude` comm
 config names, so it may do what that command is set up to allow, and nothing asks you in
 between. It starts in the review's repo: the app asks once for the folder your code is kept
 under, and `revui checkout` finds each repo there, or starts the agent in that folder to
-find its own way. In a browser there is no process to start: Ask, Verify and Diagram go to an agent
+find its own way.
+
+The conversation is that Claude Code session and nothing else. The panel reads it from
+the transcript Claude Code keeps, so it shows what was said before the window opened, and
+rolls the agent's tool calls up into a line you can open: to the calls, then to what each
+ran and what came back. The terminal button in its header carries the same session on in
+a terminal of yours, as `revui resume <dir>` does from any terminal, and what happens
+there shows up in the panel. In a browser there is no process to start: Ask, Verify and Diagram go to an agent
 in a pane of the app the page sits in (tmux, Herdr, Orca, Cursor), through `revui agent`.
 
 ## Checking and recording it

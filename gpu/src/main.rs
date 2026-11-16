@@ -254,7 +254,9 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, range: None, floating: false, minimized: false, asking: false, leave: false, stamp: host::stamp(dir), looked: 0.0 })
+        let mut open = Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, range: None, floating: false, minimized: false, asking: false, leave: false, stamp: host::stamp(dir), looked: 0.0 };
+        open.chat.sync(dir);
+        Ok(open)
     }
 
     /// Picks up what the agent, or the terminal viewer, wrote to the bundle since it was last read.
@@ -263,6 +265,7 @@ impl Open {
             return;
         }
         self.looked = now;
+        self.chat.sync(&self.dir);
         let stamp = host::stamp(&self.dir);
         if stamp != self.stamp {
             let _ = self.refresh();
@@ -542,16 +545,20 @@ fn mono(size: f32) -> FontId {
     FontId::new(size, FontFamily::Monospace)
 }
 
-/// One run of prose as laid-out text: file paths, routes, calls and constants are set in mono on a tint, the way backticks would.
-fn inline(tones: &Tones, text: &str) -> egui::text::LayoutJob {
-    static CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"`[^`]+`|[\w.-]+/[\w./-]*\.\w+(?::\d+)?|\B/[a-z][\w/:-]+|\b\w[\w-]+\.[a-z]{2,4}(?::\d+)?\b|\b[A-Za-z_][\w.]*\([^()\s]*\)|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[a-z]+_[a-z_]+\b").expect("a fixed pattern"));
-    let plain = egui::TextFormat { font_id: FontId::proportional(15.0), color: tones.text, line_height: Some(23.0), ..Default::default() };
-    let code = egui::TextFormat { font_id: mono(13.0), color: tones.strong, background: tones.raised, ..plain.clone() };
+/// One run of prose as laid-out text: file paths, routes, calls and constants are set in mono on a tint, the way backticks would, and `**this**` in bold.
+fn inline(tones: &Tones, text: &str, size: f32) -> egui::text::LayoutJob {
+    static CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\*\*[^*\n]+\*\*|`[^`]+`|[\w.-]+/[\w./-]*\.\w+(?::\d+)?|\B/[a-z][\w/:-]+|\b\w[\w-]+\.[a-z]{2,4}(?::\d+)?\b|\b[A-Za-z_][\w.]*\([^()\s]*\)|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[a-z]+_[a-z_]+\b").expect("a fixed pattern"));
+    let plain = egui::TextFormat { font_id: FontId::proportional(size), color: tones.text, line_height: Some((size * 1.53).round()), ..Default::default() };
+    let code = egui::TextFormat { font_id: mono(size - 2.0), color: tones.strong, background: tones.raised, ..plain.clone() };
+    let strong = egui::TextFormat { font_id: bold(size), color: tones.strong, ..plain.clone() };
     let mut job = egui::text::LayoutJob::default();
     let mut from = 0;
     for found in CODE.find_iter(text) {
         job.append(&text[from..found.start()], 0.0, plain.clone());
-        job.append(found.as_str().trim_matches('`'), 0.0, code.clone());
+        match found.as_str().strip_prefix("**") {
+            Some(said) => job.append(said.trim_end_matches('*'), 0.0, strong.clone()),
+            None => job.append(found.as_str().trim_matches('`'), 0.0, code.clone()),
+        }
         from = found.end();
     }
     job.append(&text[from..], 0.0, plain);
@@ -559,33 +566,37 @@ fn inline(tones: &Tones, text: &str) -> egui::text::LayoutJob {
 }
 
 /// A line of prose that wraps, with merge request numbers, ticket ids and URLs as links.
-fn line(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
+fn line(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) {
     static LINK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"https?://[^\s)>\]]+|\B[!#]\d+\b|\b[A-Z]{2,}-\d+\b").expect("a fixed pattern"));
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let mut from = 0;
         for found in LINK.find_iter(text) {
             let Some(url) = links.of(found.as_str()) else { continue };
-            ui.label(inline(tones, &text[from..found.start()]));
-            let mut job = inline(tones, "");
-            job.append(found.as_str(), 0.0, egui::TextFormat { font_id: FontId::proportional(15.0), color: tones.accent, line_height: Some(23.0), underline: Stroke::new(1.0, tones.accent.gamma_multiply(0.5)), ..Default::default() });
+            ui.label(inline(tones, &text[from..found.start()], size));
+            let mut job = inline(tones, "", size);
+            job.append(found.as_str(), 0.0, egui::TextFormat { font_id: FontId::proportional(size), color: tones.accent, line_height: Some((size * 1.53).round()), underline: Stroke::new(1.0, tones.accent.gamma_multiply(0.5)), ..Default::default() });
             if ui.add(egui::Label::new(job).sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&url).clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(url));
             }
             from = found.end();
         }
-        ui.label(inline(tones, &text[from..]));
+        ui.label(inline(tones, &text[from..], size));
     });
 }
 
 fn prose(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
+    prose_at(ui, tones, links, text, 15.0);
+}
+
+fn prose_at(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) {
     ui.scope(|ui| {
         ui.set_max_width(680.0_f32.min(ui.available_width()));
         for block in text.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") })) {
             let mut lines = block.lines().peekable();
             if let Some(heading) = lines.peek().and_then(|line| line.strip_prefix("# ")) {
                 ui.add_space(12.0);
-                ui.label(RichText::new(heading).font(bold(15.0)).color(tones.strong));
+                ui.label(RichText::new(heading).font(bold(size)).color(tones.strong));
                 ui.add_space(2.0);
                 lines.next();
             }
@@ -594,11 +605,11 @@ fn prose(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
                 let listed = mark == "-" || mark == "*" || mark.strip_suffix('.').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
                 if listed {
                     ui.horizontal_top(|ui| {
-                        ui.add_sized([22.0, 23.0], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).font(mono(13.0)).color(tones.dim)));
-                        self::line(ui, tones, links, rest);
+                        ui.add_sized([22.0, (size * 1.53).round()], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).font(mono(size - 2.0)).color(tones.dim)));
+                        self::line(ui, tones, links, rest, size);
                     });
                 } else {
-                    self::line(ui, tones, links, line);
+                    self::line(ui, tones, links, line, size);
                 }
             }
             ui.add_space(8.0);
@@ -614,6 +625,80 @@ fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Resp
     fx::touch(ui, made, ink)
 }
 
+/// What the agent said: prose as the cards set it, and what it fenced as code on a dark slab.
+fn reply(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
+    for (n, part) in text.split("```").enumerate() {
+        if n % 2 == 1 {
+            let code = part.split_once('\n').map_or(part, |(_, code)| code).trim_end();
+            egui::Frame::new().fill(INK).inner_margin(10.0).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(egui::Label::new(RichText::new(code).font(mono(12.0)).color(ON_INK)).selectable(true));
+            });
+        } else if !part.trim().is_empty() {
+            prose_at(ui, tones, links, part, 13.5);
+        }
+    }
+}
+
+/// A run of the agent's tool calls rolled up into one line. It opens to the calls, and each call opens to what it
+/// ran and what came back.
+fn steps(ui: &mut egui::Ui, tones: &Tones, steps: &[&chat::Step], live: bool) {
+    let flip = |ui: &mut egui::Ui, key: egui::Id, text: egui::WidgetText| {
+        let shown = ui.data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+        let row = ui.add(egui::Label::new(text).truncate().selectable(false).sense(egui::Sense::click()));
+        let pressed = fx::touch(ui, row, tones.strong).clicked();
+        if pressed {
+            ui.data_mut(|data| data.insert_temp(key, !shown));
+        }
+        shown != pressed
+    };
+    let mut kinds: Vec<(&str, usize)> = Vec::new();
+    for step in steps {
+        match kinds.iter_mut().find(|(name, _)| *name == step.name) {
+            Some((_, times)) => *times += 1,
+            None => kinds.push((&step.name, 1)),
+        }
+    }
+    let kinds: Vec<String> = kinds.iter().map(|(name, times)| if *times > 1 { format!("{name} ×{times}") } else { name.to_string() }).collect();
+    let failed = steps.iter().filter(|step| step.result.as_ref().is_some_and(|(_, failed)| *failed)).count();
+    let key = egui::Id::new(("steps", &steps[0].id));
+    let shown = ui.data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+    let head = format!("{}  {} step{}{}   {}", if shown { Icon::ChevronDown } else { Icon::ChevronRight }.unicode(), steps.len(), if steps.len() == 1 { "" } else { "s" }, if failed > 0 { format!(", {failed} failed") } else { String::new() }, kinds.join(" · "));
+    if !flip(ui, key, RichText::new(head).font(mono(11.5)).color(tones.dim).into()) {
+        if let (true, Some(last)) = (live, steps.last()) {
+            ui.add(egui::Label::new(RichText::new(format!("     {} {}", last.name, last.what)).font(mono(11.5)).color(tones.dim)).truncate());
+        }
+        return;
+    }
+    for step in steps {
+        let (mark, ink) = match &step.result {
+            Some((_, true)) => (Icon::X, tones.rust),
+            Some(_) => (Icon::Check, tones.dim),
+            None => (Icon::Ellipsis, tones.dim),
+        };
+        let mut row = egui::text::LayoutJob::default();
+        row.append(&format!("     {}  ", mark.unicode()), 0.0, egui::TextFormat { font_id: mono(11.5), color: ink, ..Default::default() });
+        row.append(&step.name, 0.0, egui::TextFormat { font_id: mono(11.5), color: tones.strong, ..Default::default() });
+        row.append(&format!("  {}", step.what), 0.0, egui::TextFormat { font_id: mono(11.5), color: tones.dim, ..Default::default() });
+        if !flip(ui, egui::Id::new(("step", &step.id)), row.into()) {
+            continue;
+        }
+        egui::Frame::new().fill(INK).inner_margin(9.0).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(RichText::new(&step.input).font(mono(11.5)).color(ON_INK)).selectable(true));
+            if let Some((said, failed)) = &step.result {
+                let lines: Vec<&str> = said.lines().collect();
+                let more = lines.len().saturating_sub(16);
+                ui.add_space(6.0);
+                ui.add(egui::Label::new(RichText::new(lines[..lines.len() - more].join("\n")).font(mono(11.0)).color(if *failed { tones.rust } else { ON_INK.gamma_multiply(0.6) })).selectable(true));
+                if more > 0 {
+                    ui.label(RichText::new(format!("… {more} more lines")).font(mono(11.0)).color(ON_INK.gamma_multiply(0.45)));
+                }
+            }
+        });
+    }
+}
+
 /// The review's agent: what was said, the box to ask in, and the controls that detach, minimize and close it.
 fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
     ui.horizontal(|ui| {
@@ -627,24 +712,49 @@ fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
             open.minimized = small(ui, Icon::Minus, "Minimize to the bottom bar (Cmd-Shift-M)");
             let (other, hint) = if open.floating { (Icon::PanelRight, "Dock to the side (Cmd-Shift-D)") } else { (Icon::PictureInPicture2, "Detach: a panel you can move and resize (Cmd-Shift-D)") };
             open.floating ^= small(ui, other, hint);
+            #[cfg(not(target_arch = "wasm32"))]
+            if small(ui, Icon::SquareTerminal, "Carry this conversation on in a terminal: the same Claude Code session, as `revui resume` starts it anywhere") {
+                if let Err(problem) = revui(&["resume", &open.dir], None) {
+                    open.note = problem;
+                }
+            }
         });
     });
+    let links = open.data.links.clone();
     ui.add_space(6.0);
     egui::ScrollArea::vertical().auto_shrink(false).max_height((ui.available_height() - 124.0).max(80.0)).stick_to_bottom(true).show(ui, |ui| {
         if open.chat.log.is_empty() {
             ui.label(RichText::new("This review's agent. It wrote the guide, so it already knows the change. Ask it about the card you are on.\n\nCmd-J opens and closes it, Cmd-Shift-M minimizes it to the bottom bar, Cmd-Shift-D pulls it out or docks it.").size(13.0).color(tones.dim));
         }
-        for said in &open.chat.log {
-            match said {
-                chat::Said::Me(text) => drop(egui::Frame::new().fill(tones.accent).inner_margin(8.0).show(ui, |ui| ui.label(RichText::new(text).size(13.5).color(tones.on_accent)))),
-                chat::Said::Agent(text) => drop(ui.add(egui::Label::new(RichText::new(text).size(13.5).color(tones.text)).selectable(true))),
-                chat::Said::Tool(text) => drop(ui.label(RichText::new(text).font(mono(11.5)).color(tones.dim))),
+        let log = &open.chat.log;
+        let mut n = 0;
+        while n < log.len() {
+            match &log[n] {
+                chat::Said::Me(text) => {
+                    ui.add_space(6.0);
+                    let said = egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.line)).inner_margin(egui::Margin::symmetric(12, 9)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.add(egui::Label::new(RichText::new(text).size(13.5).color(tones.strong)).selectable(true));
+                    });
+                    ui.painter().rect_filled(egui::Rect::from_min_size(said.response.rect.min, egui::vec2(2.0, said.response.rect.height())), 0.0, tones.accent);
+                }
+                chat::Said::Agent(text) => reply(ui, tones, &links, text),
+                chat::Said::Tool(_) => {
+                    let run: Vec<&chat::Step> = log[n..].iter().map_while(|said| if let chat::Said::Tool(step) = said { Some(step) } else { None }).collect();
+                    n += run.len() - 1;
+                    steps(ui, tones, &run, open.chat.busy && n + 1 == log.len());
+                }
                 chat::Said::Problem(text) => drop(ui.label(RichText::new(text).size(13.0).color(tones.rust))),
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
+            n += 1;
         }
         if open.chat.busy {
-            ui.label(RichText::new("working").font(mono(11.5)).color(tones.dim));
+            ui.horizontal(|ui| {
+                let (bar, _) = ui.allocate_exact_size(egui::vec2(44.0, 2.0), egui::Sense::hover());
+                fx::shimmer(ui, bar, tones.strong);
+                ui.label(RichText::new("working").font(mono(11.5)).color(tones.dim));
+            });
         }
     });
     ui.add_space(8.0);

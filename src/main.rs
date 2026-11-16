@@ -1961,6 +1961,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some("map"), Some(dir)) => return Ok(print!("{}", mrs::map_report(Path::new(dir))?)),
         (Some("checkout"), Some(dir)) => return Ok(println!("{}", mrs::checkout(Path::new(dir), args.get(2).map(String::as_str))?)),
         (Some("tree"), Some(dir)) => return Ok(println!("{}", mrs::tree(Path::new(dir))?)),
+        (Some("resume"), Some(dir)) => {
+            use std::io::IsTerminal;
+            let saved: Option<Session> = std::fs::read_to_string(Path::new(dir).join("session.json")).ok().and_then(|text| serde_json::from_str(&text).ok());
+            let saved = saved.filter(|saved| !saved.id.is_empty() && Path::new(&saved.cwd).is_dir()).ok_or("this review's agent has no conversation to carry on yet: ask it something first")?;
+            let script = mrs::agents().into_iter().find(|agent| agent.name == saved.agent).and_then(|agent| agent.resume).unwrap_or_else(|| "$REVUI_CLAUDE --resume \"$REVUI_SESSION_ID\"".into());
+            let env = [("REVUI_CLAUDE".to_string(), mrs::claude()), ("REVUI_SESSION_ID".to_string(), saved.id.clone()), ("REVUI_DIR".to_string(), dir.clone())];
+            if std::io::stdin().is_terminal() {
+                let ran = std::process::Command::new("sh").args(["-c", &script]).envs(env).current_dir(&saved.cwd).status()?;
+                std::process::exit(ran.code().unwrap_or(1));
+            }
+            return Ok(mrs::in_terminal(&script, &env, Some(&saved.cwd))?);
+        }
         (Some("open"), Some(dir)) if args.len() > 2 => return Ok(open_outside(Path::new(dir), &args[2], args.get(3).and_then(|line| line.parse().ok()).unwrap_or(1))?),
         (Some("doctor"), _) => {
             use std::io::IsTerminal;
@@ -2003,6 +2015,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui checkout <dir> [root]   the folder that review's agent starts in: its repo, found under the folder your code is kept in (given once)\n\
                  revui tree <dir>        the folders of that review's repo and how many files each holds, as JSON, read from that checkout\n\
                  revui open <dir> <file> [line]   open a file of the review with the config's open command, in a terminal of yours if it needs one\n\
+                 revui resume <dir>      carry on the conversation with that review's agent here, as the Claude Code session it is\n\
                  revui doctor            check the setup, exit 1 when something needs fixing\n\
                  revui setup             have a coding agent set revui up for you\n\
                  revui setup --guide     print the setup guide that agent follows\n\

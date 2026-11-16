@@ -3,10 +3,19 @@ pub use native::*;
 #[cfg(target_arch = "wasm32")]
 pub use web::*;
 
+/// One thing the agent did with a tool: what it ran, and what came back once it has.
+pub struct Step {
+    pub id: String,
+    pub name: String,
+    pub what: String,
+    pub input: String,
+    pub result: Option<(String, bool)>,
+}
+
 pub enum Said {
     Me(String),
     Agent(String),
-    Tool(String),
+    Tool(Step),
     Problem(String),
 }
 
@@ -31,13 +40,15 @@ mod web {
     impl Chat {
         pub fn take(&mut self) {}
 
+        pub fn sync(&mut self, _dir: &str) {}
+
         pub fn stop(&mut self) {}
 
         pub fn send(&mut self, _ctx: &egui::Context, dir: &str, _claude: &str, _folder: &str, about: (&str, Option<&str>), _prompt: String, shown: String) {
             let args: Vec<&str> = ["agent", dir, about.0].into_iter().chain(about.1).collect();
             self.log.push(Said::Me(shown));
             self.log.push(match crate::host::run(&args, None) {
-                Ok(note) => Said::Tool(note.trim().to_string()),
+                Ok(note) => Said::Agent(note.trim().to_string()),
                 Err(problem) => Said::Problem(problem),
             });
         }
@@ -46,7 +57,7 @@ mod web {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use super::Said;
+    use super::{Said, Step};
     use eframe::egui;
     use std::io::{BufRead, BufReader, Read};
     use std::process::{Child, Command, Stdio};
@@ -54,7 +65,8 @@ mod native {
     use std::sync::{Arc, Mutex};
 
     enum Event {
-        Said(Said),
+        Line(serde_json::Value),
+        Problem(String),
         Done,
     }
 
@@ -66,12 +78,65 @@ mod native {
         pub draft: String,
         events: (Sender<Event>, Receiver<Event>),
         child: Arc<Mutex<Option<Child>>>,
+        read: Option<std::time::SystemTime>,
     }
 
     impl Default for Chat {
         fn default() -> Self {
-            Self { log: Vec::new(), busy: false, draft: String::new(), events: channel(), child: Default::default() }
+            Self { log: Vec::new(), busy: false, draft: String::new(), events: channel(), child: Default::default(), read: None }
         }
+    }
+
+    /// What one line of Claude Code's stream, or of the transcript it keeps of a session, adds to the conversation.
+    /// The transcript also holds what the person asked; the stream does not, so `asked` says whether to take it.
+    fn add(log: &mut Vec<Said>, line: &serde_json::Value, asked: bool) {
+        let content = &line["message"]["content"];
+        let short = |text: &str| text.char_indices().nth(6000).map_or(text.to_string(), |(at, _)| format!("{}\n…", &text[..at]));
+        match (line["type"].as_str(), content.as_str()) {
+            (Some("user"), Some(text)) if asked && !text.trim_start().starts_with('<') => log.push(Said::Me(text.trim().to_string())),
+            (Some("user"), None) => {
+                for block in content.as_array().into_iter().flatten() {
+                    match block["type"].as_str() {
+                        Some("text") if asked && !block["text"].as_str().unwrap_or("<").trim_start().starts_with('<') => log.push(Said::Me(block["text"].as_str().unwrap_or("").trim().to_string())),
+                        Some("tool_result") => {
+                            let said = block["content"].as_str().map(String::from).unwrap_or_else(|| block["content"].as_array().into_iter().flatten().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("\n"));
+                            let step = log.iter_mut().rev().find_map(|said| match said {
+                                Said::Tool(step) if block["tool_use_id"] == step.id.as_str() => Some(step),
+                                _ => None,
+                            });
+                            if let Some(step) = step {
+                                step.result = Some((short(said.trim()), block["is_error"] == true));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            (Some("assistant"), _) => {
+                for block in content.as_array().into_iter().flatten() {
+                    match block["type"].as_str() {
+                        Some("text") if !block["text"].as_str().unwrap_or("").trim().is_empty() => log.push(Said::Agent(block["text"].as_str().unwrap_or("").trim().to_string())),
+                        Some("tool_use") => {
+                            let input = &block["input"];
+                            let what = ["command", "file_path", "pattern", "description", "url", "prompt", "skill"].iter().find_map(|key| input[*key].as_str()).unwrap_or("");
+                            let whole = input["command"].as_str().map(String::from).unwrap_or_else(|| serde_json::to_string_pretty(input).unwrap_or_default());
+                            log.push(Said::Tool(Step { id: block["id"].as_str().unwrap_or("").to_string(), name: block["name"].as_str().unwrap_or("tool").to_string(), what: what.lines().next().unwrap_or("").to_string(), input: short(&whole), result: None }));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Where Claude Code keeps the transcript of this bundle's session.
+    // ponytail: looks under $CLAUDE_CONFIG_DIR, then ~/.claude; a `claude` command that keeps its sessions elsewhere shows only what this window streamed.
+    fn transcript(dir: &str) -> Option<std::path::PathBuf> {
+        let (id, cwd) = session(dir)?;
+        let slug: String = cwd.chars().map(|letter| if letter.is_ascii_alphanumeric() { letter } else { '-' }).collect();
+        let homes = [std::env::var("CLAUDE_CONFIG_DIR").ok().map(std::path::PathBuf::from), std::env::var("HOME").ok().map(|home| std::path::Path::new(&home).join(".claude"))];
+        homes.into_iter().flatten().map(|home| home.join("projects").join(&slug).join(format!("{id}.jsonl"))).find(|path| path.is_file())
     }
 
     fn uuid() -> String {
@@ -94,10 +159,38 @@ mod native {
         pub fn take(&mut self) {
             while let Ok(event) = self.events.1.try_recv() {
                 match event {
-                    Event::Said(said) => self.log.push(said),
+                    Event::Line(line) if line["type"] == "result" => {
+                        let (text, failed) = (line["result"].as_str().unwrap_or("").to_string(), line["is_error"] == true);
+                        let answered = self.log.iter().rev().take_while(|said| !matches!(said, Said::Me(_))).any(|said| matches!(said, Said::Agent(_)));
+                        if !text.is_empty() && (failed || !answered) {
+                            self.log.push(if failed { Said::Problem(text) } else { Said::Agent(text) });
+                        }
+                    }
+                    Event::Line(line) => add(&mut self.log, &line, false),
+                    Event::Problem(problem) => self.log.push(Said::Problem(problem)),
                     Event::Done => self.busy = false,
                 }
             }
+        }
+
+        /// Shows the session as Claude Code has it on disk, whenever that changes: what was said before this window
+        /// opened, and what a terminal carrying on the same session has done since.
+        pub fn sync(&mut self, dir: &str) {
+            let Some(path) = transcript(dir).filter(|_| !self.busy) else { return };
+            let stamp = std::fs::metadata(&path).and_then(|file| file.modified()).ok();
+            if stamp.is_none() || stamp == self.read {
+                return;
+            }
+            self.read = stamp;
+            let mut log = Vec::new();
+            for line in std::fs::read_to_string(&path).unwrap_or_default().lines().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok()) {
+                if line["isSidechain"] != true && line["isMeta"] != true {
+                    add(&mut log, &line, true);
+                }
+            }
+            let failed = self.log.drain(..).rev().take_while(|said| matches!(said, Said::Problem(_))).collect::<Vec<_>>();
+            self.log = log;
+            self.log.extend(failed.into_iter().rev());
         }
 
         pub fn stop(&mut self) {
@@ -135,44 +228,22 @@ mod native {
             self.busy = true;
             let (tell, ctx, held) = (self.events.0.clone(), ctx.clone(), self.child.clone());
             std::thread::spawn(move || {
-                let say = |said: Said| {
-                    let _ = tell.send(Event::Said(said));
+                let say = |event: Event| {
+                    let _ = tell.send(event);
                     ctx.request_repaint();
                 };
-                let mut answered = false;
                 for line in out.into_iter().flat_map(|out| BufReader::new(out).lines().map_while(Result::ok)) {
-                    let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-                    match message["type"].as_str() {
-                        Some("assistant") => {
-                            for block in message["message"]["content"].as_array().into_iter().flatten() {
-                                match block["type"].as_str() {
-                                    Some("text") => (answered = true, say(Said::Agent(block["text"].as_str().unwrap_or("").to_string()))).1,
-                                    Some("tool_use") => {
-                                        let input = &block["input"];
-                                        let what = ["command", "file_path", "pattern", "description", "url"].iter().find_map(|key| input[*key].as_str()).unwrap_or("");
-                                        say(Said::Tool(format!("{} {}", block["name"].as_str().unwrap_or("tool"), what.lines().next().unwrap_or(""))));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        Some("result") if message["is_error"] == true || !answered => {
-                            let text = message["result"].as_str().unwrap_or("").to_string();
-                            if !text.is_empty() {
-                                say(if message["is_error"] == true { Said::Problem(text) } else { Said::Agent(text) });
-                            }
-                        }
-                        _ => {}
+                    if let Ok(line) = serde_json::from_str::<serde_json::Value>(&line) {
+                        say(Event::Line(line));
                     }
                 }
                 let mut said = String::new();
                 let _ = err.map(|mut err| err.read_to_string(&mut said));
                 let ended = held.lock().unwrap().take().and_then(|mut child| child.wait().ok());
                 if let (false, Some(line)) = (ended.is_some_and(|status| status.success()), said.lines().rev().find(|line| !line.trim().is_empty())) {
-                    say(Said::Problem(line.trim().to_string()));
+                    say(Event::Problem(line.trim().to_string()));
                 }
-                let _ = tell.send(Event::Done);
-                ctx.request_repaint();
+                say(Event::Done);
             });
         }
     }

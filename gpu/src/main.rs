@@ -228,6 +228,12 @@ struct Open {
     chat: chat::Chat,
     agent: bool,
     ask: bool,
+    /// The row where a selection made with V began; it runs from there to the cursor.
+    range: Option<usize>,
+    floating: bool,
+    minimized: bool,
+    asking: bool,
+    leave: bool,
     stamp: String,
     looked: f64,
 }
@@ -247,7 +253,7 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, stamp: host::stamp(dir), looked: 0.0 })
+        Ok(Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, range: None, floating: false, minimized: false, asking: false, leave: false, stamp: host::stamp(dir), looked: 0.0 })
     }
 
     /// Picks up what the agent, or the terminal viewer, wrote to the bundle since it was last read.
@@ -392,13 +398,24 @@ impl Open {
         all
     }
 
+    /// What a comment made from the diff lands on: the file, its last line, the side, and the first line when V selected several.
+    /// A selection is cut to the stretch that shares the last row's file and side, since one comment cannot span more.
+    fn picked(&self) -> Option<(String, u32, bool, Option<u32>)> {
+        let rows = self.lines();
+        let (low, high) = self.range.map_or((self.line, self.line), |from| (from.min(self.line), from.max(self.line)));
+        let (file, line, old) = rows.get(high).filter(|_| self.in_diff)?.clone();
+        let first = (low..high).rev().take_while(|&row| rows[row].0 == file && rows[row].2 == old).last().map(|row| rows[row].1);
+        Some((file, line, old, first))
+    }
+
     /// Adds the draft as a comment: on the diff line under the cursor, on the finding shown, or on the whole merge request.
     fn comment(&mut self) -> Result<(), String> {
         let text = self.draft.trim().to_string();
         if text.is_empty() {
             return Ok(());
         }
-        let picked = self.lines().get(self.line).cloned().filter(|_| self.in_diff);
+        let picked = self.picked();
+        self.range = None;
         let item = match self.cards[self.at] {
             Card::Item(n) => Some(self.data.review.items[n].id.clone()),
             _ => None,
@@ -408,7 +425,7 @@ impl Open {
             _ => None,
         };
         let note = match picked {
-            Some((file, line, old)) => serde_json::json!({ "text": text, "file": file, "line": line, "start": null, "old": old, "item": null, "reply_to": null, "posted": false }),
+            Some((file, line, old, start)) => serde_json::json!({ "text": text, "file": file, "line": line, "start": start, "old": old, "item": null, "reply_to": null, "posted": false }),
             None => serde_json::json!({ "text": text, "file": null, "line": null, "start": null, "old": false, "item": item, "reply_to": reply, "posted": false }),
         };
         let mut state = self.data.state.clone();
@@ -583,6 +600,67 @@ fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Resp
     made
 }
 
+/// The review's agent: what was said, the box to ask in, and the controls that detach, minimize and close it.
+fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Agent").font(mono(13.0)).color(tones.strong).strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let small = |ui: &mut egui::Ui, icon: Icon, hint: &str| ui.add(egui::Button::new(RichText::new(icon.unicode().to_string()).size(15.0).color(tones.text)).frame(false)).on_hover_text(hint).clicked();
+            open.agent = !small(ui, Icon::X, "Close (Cmd-J)");
+            open.minimized = small(ui, Icon::Minus, "Minimize to the bottom bar");
+            let (other, hint) = if open.floating { (Icon::PanelRight, "Dock to the side") } else { (Icon::PictureInPicture2, "Detach: a panel you can move and resize") };
+            open.floating ^= small(ui, other, hint);
+        });
+    });
+    ui.add_space(6.0);
+    egui::ScrollArea::vertical().auto_shrink(false).max_height((ui.available_height() - 136.0).max(80.0)).stick_to_bottom(true).show(ui, |ui| {
+        if open.chat.log.is_empty() {
+            ui.label(RichText::new("This review's agent. It wrote the guide, so it already knows the change. Ask it about the card you are on.").size(13.0).color(tones.dim));
+        }
+        for said in &open.chat.log {
+            match said {
+                chat::Said::Me(text) => drop(egui::Frame::new().fill(tones.accent).inner_margin(8.0).show(ui, |ui| ui.label(RichText::new(text).size(13.5).color(tones.on_accent)))),
+                chat::Said::Agent(text) => drop(ui.add(egui::Label::new(RichText::new(text).size(13.5).color(tones.text)).selectable(true))),
+                chat::Said::Tool(text) => drop(ui.label(RichText::new(text).font(mono(11.5)).color(tones.dim))),
+                chat::Said::Problem(text) => drop(ui.label(RichText::new(text).size(13.0).color(tones.rust))),
+            }
+            ui.add_space(6.0);
+        }
+        if open.chat.busy {
+            ui.label(RichText::new("working").font(mono(11.5)).color(tones.dim));
+        }
+    });
+    ui.add_space(8.0);
+    let about = open.on().map_or("Ask about this review".to_string(), |on| format!("Ask about {on}"));
+    let field = ui.add(egui::TextEdit::multiline(&mut open.chat.draft).desired_width(f32::INFINITY).desired_rows(3).hint_text(about));
+    if std::mem::take(&mut open.ask) {
+        field.request_focus();
+    } else if open.leave {
+        field.surrender_focus();
+    }
+    open.asking = field.has_focus();
+    let entered = field.has_focus() && ui.input(|input| input.key_pressed(Key::Enter) && !input.modifiers.shift);
+    ui.horizontal(|ui| {
+        let verify = button(ui, tones, &icon(Icon::ShieldCheck, "Verify"), false).clicked();
+        let draw = button(ui, tones, &icon(Icon::Workflow, "Diagram"), false).clicked();
+        let stop = open.chat.busy && button(ui, tones, &icon(Icon::Square, "Stop"), false).clicked();
+        let send = !open.chat.busy && (button(ui, tones, &icon(Icon::ArrowUp, "Send"), true).clicked() || entered);
+        if stop {
+            open.chat.stop();
+        }
+        if verify {
+            open.tell(ui.ctx(), "verify", "");
+        }
+        if draw {
+            open.tell(ui.ctx(), "artifact", "");
+        }
+        if send && !open.chat.draft.trim().is_empty() {
+            let text = std::mem::take(&mut open.chat.draft);
+            open.tell(ui.ctx(), "ask", text.trim());
+        }
+    });
+}
+
 impl eframe::App for App {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.play.step(raw);
@@ -707,29 +785,61 @@ impl eframe::App for App {
         let step = (pressed(Key::L) || pressed(Key::ArrowRight)) as isize - (pressed(Key::H) || pressed(Key::ArrowLeft)) as isize;
         if step != 0 {
             open.at = (open.at as isize + step).clamp(0, open.cards.len() as isize - 1) as usize;
-            (open.in_diff, open.line, open.proof) = (false, 0, 0);
+            (open.in_diff, open.line, open.proof, open.range) = (false, 0, 0, None);
         }
         open.diff ^= pressed(Key::D);
         if pressed(Key::B) {
             open.contents = Some(open.at);
         }
-        if std::mem::take(&mut self.tab) && !modal && open.diff && open.group().is_some() {
-            (open.in_diff, open.moved) = (!open.in_diff, true);
+        let shift = ctx.input(|input| input.modifiers.shift);
+        let held = |key: Key| !typing && !modal && ctx.input(|input| input.modifiers.ctrl && input.key_pressed(key));
+        let asking = std::mem::take(&mut open.asking);
+        if std::mem::take(&mut self.tab) && !modal {
+            let chat = open.agent && !open.minimized;
+            open.leave = true;
+            if asking {
+            } else if open.in_diff {
+                (open.in_diff, open.range, open.ask) = (false, None, chat);
+            } else if open.diff && open.group().is_some() {
+                (open.in_diff, open.moved) = (true, true);
+            } else {
+                open.ask = chat;
+            }
         }
         let down = (pressed(Key::J) || pressed(Key::ArrowDown)) as isize - (pressed(Key::K) || pressed(Key::ArrowUp)) as isize;
-        if down != 0 && open.in_diff {
-            (open.line, open.moved) = ((open.line as isize + down).clamp(0, open.lines().len().saturating_sub(1) as isize) as usize, true);
-        } else if let (true, Card::Item(n)) = (down != 0, open.cards[open.at]) {
-            open.proof = (open.proof as isize + down).clamp(0, open.data.review.items[n].evidence.len().saturating_sub(1) as isize) as usize;
+        let half = (pressed(Key::U) && !shift || pressed(Key::PageDown) || held(Key::D)) as isize - (pressed(Key::U) && shift || pressed(Key::PageUp) || held(Key::U)) as isize;
+        let end = pressed(Key::G).then_some(shift);
+        let mut glide = (0.0, None);
+        if open.in_diff {
+            let last = open.lines().len().saturating_sub(1) as isize;
+            let to = match end {
+                Some(bottom) => bottom as isize * last,
+                None => open.line as isize + down + half * 15,
+            };
+            if down != 0 || half != 0 || end.is_some() {
+                (open.line, open.moved) = (to.clamp(0, last) as usize, true);
+            }
+            if pressed(Key::V) && shift {
+                open.range = if open.range.is_some() { None } else { Some(open.line) };
+            }
+            if ctx.input(|input| input.key_pressed(Key::Escape)) {
+                open.range = None;
+            }
+        } else {
+            glide = ((down * 60 + half * 420) as f32, end);
+            if let (true, Card::Item(n)) = (pressed(Key::E), open.cards[open.at]) {
+                let count = open.data.review.items[n].evidence.len().max(1);
+                (open.proof, open.moved) = ((open.proof + if shift { count - 1 } else { 1 }) % count, true);
+            }
         }
         open.compose |= pressed(Key::C);
         if pressed(Key::T) {
-            (open.agent, open.ask) = (true, true);
+            (open.agent, open.minimized, open.ask) = (true, false, true);
         }
         if ctx.input(|input| input.modifiers.command && input.key_pressed(Key::J)) {
-            open.agent = !open.agent;
+            (open.agent, open.minimized) = (!open.agent || open.minimized, false);
         }
-        if pressed(Key::V) {
+        if pressed(Key::V) && !shift {
             open.agent = true;
             open.tell(&ctx, "verify", "");
         }
@@ -765,7 +875,9 @@ impl eframe::App for App {
                     if button(ui, &tones, &icon(Icon::Send, &count), true).on_hover_text("Publish (p)").clicked() {
                         open.publish = Some((0, open.data.preview.clone()));
                     }
-                    open.agent ^= button(ui, &tones, &icon(Icon::Bot, if open.chat.busy { "working" } else { "" }), open.agent).on_hover_text("Agent (t)").clicked();
+                    if button(ui, &tones, &icon(Icon::Bot, if open.chat.busy { "working" } else { "" }), open.agent && !open.minimized).on_hover_text("Agent (t)").clicked() {
+                        (open.agent, open.minimized) = (!open.agent || open.minimized, false);
+                    }
                     open.diff ^= button(ui, &tones, &icon(Icon::FileDiff, ""), open.diff).on_hover_text("Diff (d)").clicked();
                     if button(ui, &tones, &icon(Icon::List, ""), false).on_hover_text("Contents (b)").clicked() {
                         open.contents = Some(open.at);
@@ -774,63 +886,35 @@ impl eframe::App for App {
             });
         });
         egui::Panel::bottom("keys").frame(frame.inner_margin(egui::Margin::symmetric(14, 5))).show_inside(ui, |ui| {
-            let here = if open.in_diff { "j k line · c comment on the line · tab card" } else { "j k evidence · a agree · x dismiss · c comment · tab diff" };
+            let here = if open.in_diff { "j k line · V select lines · c comment on them · tab next panel" } else { "j k scroll · e evidence · a agree · x dismiss · c comment · tab next panel" };
             let said = if open.note.is_empty() { String::new() } else { format!("   {}", open.note) };
-            ui.label(RichText::new(format!("l next · h back · {here} · t ask · v verify · i diagram · d diff · b contents · p publish · q reviews{said}")).font(mono(11.5)).color(tones.dim));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if open.agent && open.minimized {
+                    let name = format!("{}  Agent{}", Icon::Bot.unicode(), if open.chat.busy { " · working" } else { "" });
+                    if ui.add(egui::Button::new(RichText::new(name).font(bold(12.5)).color(tones.on_accent)).fill(tones.accent).corner_radius(0.0)).on_hover_text("Restore the agent (Cmd-J)").clicked() {
+                        open.minimized = false;
+                    }
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(format!("l next · h back · {here} · g G ends · u U page · t ask · v verify · i diagram · d diff · b contents · p publish · q reviews{said}")).font(mono(11.5)).color(tones.dim)).truncate());
+                });
+            });
         });
 
-        if open.agent {
+        let bar = |ui: &egui::Ui, on: bool| {
+            if on {
+                ui.painter().hline(ui.clip_rect().x_range(), ui.clip_rect().top() + 1.0, Stroke::new(2.0, tones.accent));
+            }
+        };
+        if open.agent && !open.floating && !open.minimized {
             egui::Panel::right("agent").default_size(380.0).frame(frame.inner_margin(14.0).stroke(Stroke::new(1.0, tones.line))).show_inside(ui, |ui| {
-                ui.label(RichText::new("Agent").font(mono(13.0)).color(tones.strong).strong());
-                ui.add_space(6.0);
-                egui::Panel::bottom("say").frame(egui::Frame::new()).show_inside(ui, |ui| {
-                    let about = open.on().map_or("Ask about this review".to_string(), |on| format!("Ask about {on}"));
-                    let field = ui.add(egui::TextEdit::multiline(&mut open.chat.draft).desired_width(f32::INFINITY).desired_rows(3).hint_text(about));
-                    if std::mem::take(&mut open.ask) {
-                        field.request_focus();
-                    }
-                    let entered = field.has_focus() && ui.input(|input| input.key_pressed(Key::Enter) && !input.modifiers.shift);
-                    ui.horizontal(|ui| {
-                        let verify = button(ui, &tones, &icon(Icon::ShieldCheck, "Verify"), false).clicked();
-                        let draw = button(ui, &tones, &icon(Icon::Workflow, "Diagram"), false).clicked();
-                        let stop = open.chat.busy && button(ui, &tones, &icon(Icon::Square, "Stop"), false).clicked();
-                        let send = !open.chat.busy && (button(ui, &tones, &icon(Icon::ArrowUp, "Send"), true).clicked() || entered);
-                        if stop {
-                            open.chat.stop();
-                        }
-                        if verify {
-                            open.tell(ui.ctx(), "verify", "");
-                        }
-                        if draw {
-                            open.tell(ui.ctx(), "artifact", "");
-                        }
-                        if send && !open.chat.draft.trim().is_empty() {
-                            let text = std::mem::take(&mut open.chat.draft);
-                            open.tell(ui.ctx(), "ask", text.trim());
-                        }
-                    });
-                });
-                egui::ScrollArea::vertical().auto_shrink(false).stick_to_bottom(true).show(ui, |ui| {
-                    if open.chat.log.is_empty() {
-                        ui.label(RichText::new("This review's agent. It wrote the guide, so it already knows the change. Ask it about the card you are on.").size(13.0).color(tones.dim));
-                    }
-                    for said in &open.chat.log {
-                        match said {
-                            chat::Said::Me(text) => drop(egui::Frame::new().fill(tones.accent).inner_margin(8.0).show(ui, |ui| ui.label(RichText::new(text).size(13.5).color(tones.on_accent)))),
-                            chat::Said::Agent(text) => drop(ui.add(egui::Label::new(RichText::new(text).size(13.5).color(tones.text)).selectable(true))),
-                            chat::Said::Tool(text) => drop(ui.label(RichText::new(text).font(mono(11.5)).color(tones.dim))),
-                            chat::Said::Problem(text) => drop(ui.label(RichText::new(text).size(13.0).color(tones.rust))),
-                        }
-                        ui.add_space(6.0);
-                    }
-                    if open.chat.busy {
-                        ui.label(RichText::new("working").font(mono(11.5)).color(tones.dim));
-                    }
-                });
+                agent(ui, open, &tones);
+                bar(ui, open.asking);
             });
         }
 
         if let (true, Some(group)) = (open.diff, open.group()) {
+            let mut clicked = None;
             egui::Panel::right("diff").default_size(620.0).frame(egui::Frame::new().fill(INK)).show_inside(ui, |ui| {
                 egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -859,7 +943,9 @@ impl eframe::App for App {
                                 '-' => (REMOVED, Color32::from_white_alpha(170)),
                                 _ => (Color32::TRANSPARENT, Color32::from_white_alpha(140)),
                             };
+                            let this = row;
                             let under = open.in_diff && sign != '\\' && row == open.line;
+                            let chosen = open.in_diff && sign != '\\' && open.range.is_some_and(|from| (from.min(open.line)..=from.max(open.line)).contains(&row));
                             row += (sign != '\\') as usize;
                             let drawn = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, if under { Color32::WHITE } else { Color32::TRANSPARENT })).show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
@@ -880,17 +966,34 @@ impl eframe::App for App {
                                     ui.add(egui::Label::new(code).extend());
                                 });
                             });
+                            if chosen {
+                                ui.painter().rect_filled(drawn.response.rect, 0.0, Color32::from_white_alpha(28));
+                                ui.painter().rect_filled(egui::Rect::from_min_size(drawn.response.rect.min, egui::vec2(3.0, drawn.response.rect.height())), 0.0, Color32::WHITE);
+                            }
                             if under && open.moved {
                                 drawn.response.scroll_to_me(None);
+                            }
+                            if sign != '\\' && drawn.response.interact(egui::Sense::click()).clicked() {
+                                clicked = Some(this);
                             }
                         }
                     }
                 });
+                bar(ui, open.in_diff);
             });
+            if let Some(row) = clicked {
+                (open.in_diff, open.line, open.leave) = (true, row, true);
+            }
         }
 
         egui::CentralPanel::default().frame(frame.inner_margin(egui::Margin::symmetric(30, 26))).show_inside(ui, |ui| {
-            egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            let area = egui::ScrollArea::vertical().auto_shrink(false);
+            let area = match glide.1 {
+                Some(bottom) => area.vertical_scroll_offset(if bottom { f32::MAX } else { 0.0 }),
+                None => area,
+            };
+            area.show(ui, |ui| {
+                ui.scroll_with_delta(egui::vec2(0.0, -glide.0));
                 ui.set_max_width(760.0_f32.min(ui.available_width()));
                 match open.cards[open.at] {
                     Card::Summary => {
@@ -1052,7 +1155,7 @@ impl eframe::App for App {
                         for (n, evidence) in item.evidence.iter().enumerate() {
                             ui.add_space(8.0);
                             let current = !open.in_diff && n == open.proof;
-                            egui::Frame::new().fill(INK).stroke(Stroke::new(if current { 2.0 } else { 0.0 }, tones.rust)).inner_margin(14.0).show(ui, |ui| {
+                            let proof = egui::Frame::new().fill(INK).stroke(Stroke::new(if current { 2.0 } else { 0.0 }, tones.rust)).inner_margin(14.0).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(format!("evidence.{}", n + 1)).font(mono(11.5)).color(ON_INK.gamma_multiply(0.6)));
@@ -1066,12 +1169,16 @@ impl eframe::App for App {
                                     ui.label(RichText::new(text).font(mono(12.0)).color(ON_INK));
                                 }
                             });
+                            if current && open.moved {
+                                proof.response.scroll_to_me(None);
+                            }
                         }
                     }
                 }
                 ui.add_space(18.0);
-                let about = match (open.lines().get(open.line).filter(|_| open.in_diff), open.cards[open.at]) {
-                    (Some((file, line, _)), _) => format!("Comment on {file}:{line}"),
+                let about = match (open.picked(), open.cards[open.at]) {
+                    (Some((file, line, _, Some(first))), _) => format!("Comment on {file}:{first}-{line}"),
+                    (Some((file, line, _, None)), _) => format!("Comment on {file}:{line}"),
                     (None, Card::Item(n)) => format!("Comment on {}", open.data.review.items[n].id),
                     (None, Card::Thread(_)) => "Reply in this thread".into(),
                     _ => "Comment on the whole merge request".into(),
@@ -1081,6 +1188,8 @@ impl eframe::App for App {
                 if std::mem::take(&mut open.compose) {
                     field.request_focus();
                     field.scroll_to_me(None);
+                } else if open.leave {
+                    field.surrender_focus();
                 }
                 let sent = field.has_focus() && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
                 if sent {
@@ -1092,8 +1201,13 @@ impl eframe::App for App {
                     }
                 }
             });
+            bar(ui, !open.in_diff && !open.asking);
         });
-        open.moved = false;
+        if open.agent && open.floating && !open.minimized {
+            let at = ctx.content_rect().right_bottom() - egui::vec2(460.0, 620.0);
+            egui::Window::new("agent").title_bar(false).resizable(true).default_pos(at).default_size([420.0, 540.0]).min_size([320.0, 320.0]).frame(egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.strong)).inner_margin(14.0)).show(&ctx, |ui| agent(ui, open, &tones));
+        }
+        (open.moved, open.leave) = (false, false);
 
         if let Some((mut choice, mut text)) = open.publish.take() {
             let (mut keep, mut send) = (true, false);

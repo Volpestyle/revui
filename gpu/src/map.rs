@@ -265,7 +265,8 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show
         }
         let corners = [vec2(-HALF, -HALF), vec2(HALF, -HALF), vec2(HALF, HALF), vec2(-HALF, HALF)].map(|corner| spot + corner);
         for (n, out) in [vec2(0.0, -1.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(-1.0, 0.0)].into_iter().enumerate() {
-            if out.x * sin + out.y * cos <= 0.0 {
+            // A side seen edge-on is a sliver, and its outline would spike: leave it out until it has some width.
+            if out.x * sin + out.y * cos <= 0.03 {
                 continue;
             }
             let (a, b) = (corners[n], corners[(n + 1) % 4]);

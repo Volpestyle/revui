@@ -1,3 +1,5 @@
+mod map;
+
 use eframe::egui::{self, Color32, FontFamily, FontId, Key, RichText, Stroke};
 use serde::Deserialize;
 use std::io::Write;
@@ -8,7 +10,15 @@ use std::process::{Command, Stdio};
 struct Evidence {
     provenance: String,
     caption: String,
+    path: Option<String>,
     text: Option<String>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+struct System {
+    text: String,
+    touched: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -38,6 +48,7 @@ struct Review {
     summary: String,
     sections: Vec<Section>,
     items: Vec<Item>,
+    map: Option<Evidence>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -66,6 +77,7 @@ struct Data {
     outgoing: usize,
     preview: String,
     finish: Vec<String>,
+    system: Option<System>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -269,12 +281,14 @@ struct App {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut fonts = egui::FontDefinitions::default();
-        for (name, bytes) in [("geist", include_bytes!("../fonts/Geist-Regular.ttf").as_slice()), ("geist-bold", include_bytes!("../fonts/Geist-SemiBold.ttf")), ("geist-mono", include_bytes!("../fonts/GeistMono-Regular.ttf"))] {
+        for (name, bytes) in [("geist", include_bytes!("../fonts/Geist-Regular.ttf").as_slice()), ("geist-bold", include_bytes!("../fonts/Geist-SemiBold.ttf")), ("geist-mono", include_bytes!("../fonts/GeistMono-Regular.ttf")), ("geist-serif", include_bytes!("../fonts/GeistSerif-Regular.ttf"))] {
             fonts.font_data.insert(name.into(), std::sync::Arc::new(egui::FontData::from_static(bytes)));
         }
         fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "geist".into());
         fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "geist-mono".into());
         fonts.families.insert(FontFamily::Name("bold".into()), vec!["geist-bold".into(), "geist".into()]);
+        fonts.families.insert(FontFamily::Name("serif".into()), vec!["geist-serif".into(), "geist".into()]);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         cc.egui_ctx.set_fonts(fonts);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
         let named = std::env::args().nth(1);
@@ -304,6 +318,20 @@ impl App {
 
 fn bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("bold".into()))
+}
+
+fn serif(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("serif".into()))
+}
+
+/// A picture from the bundle shown in place; anything else it holds (a recording, a file) as a link that opens it.
+fn artifact(ui: &mut egui::Ui, dir: &str, path: &str) {
+    let full = std::path::Path::new(dir).join(path);
+    let shown = matches!(full.extension().and_then(|kind| kind.to_str()), Some("png" | "jpg" | "jpeg" | "gif" | "webp"));
+    match shown {
+        true => drop(ui.add(egui::Image::new(format!("file://{}", full.display())).max_width(ui.available_width()).corner_radius(0.0))),
+        false => drop(ui.hyperlink_to(format!("Open {path}"), format!("file://{}", full.display()))),
+    }
 }
 
 fn mono(size: f32) -> FontId {
@@ -465,7 +493,7 @@ impl eframe::App for App {
         egui::Panel::top("bar").frame(frame.inner_margin(egui::Margin::symmetric(16, 9))).show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("revui").font(bold(14.0)).color(tones.strong));
-                ui.label(RichText::new(&open.data.review.title).size(16.0).color(tones.strong));
+                ui.label(RichText::new(&open.data.review.title).font(serif(16.0)).color(tones.strong));
                 ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if button(ui, &tones, &format!("Publish {}", open.data.outgoing), true).clicked() {
@@ -544,13 +572,13 @@ impl eframe::App for App {
                         let review = &open.data.review;
                         egui::Frame::new().fill(INK).inner_margin(egui::Margin::symmetric(30, 24)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.label(RichText::new(&review.title).size(25.0).color(Color32::WHITE));
+                            ui.label(RichText::new(&review.title).font(serif(25.0)).color(Color32::WHITE));
                             ui.add_space(14.0);
                             let lines = |sign: char| open.data.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
                             let stats = [(review.sections.len().to_string(), "parts"), (review.items.iter().filter(|item| item.kind == "finding").count().to_string(), "findings"), (review.items.iter().filter(|item| item.kind == "decision").count().to_string(), "decisions"), (open.data.files.len().to_string(), "files"), (format!("+{} −{}", lines('+'), lines('-')), "lines")];
                             ui.columns(stats.len(), |columns| {
                                 for (column, (value, name)) in columns.iter_mut().zip(&stats) {
-                                    column.label(RichText::new(value).size(26.0).color(Color32::WHITE));
+                                    column.label(RichText::new(value).font(serif(26.0)).color(Color32::WHITE));
                                     column.label(RichText::new(*name).size(12.5).color(ON_INK.gamma_multiply(0.6)));
                                 }
                             });
@@ -558,6 +586,58 @@ impl eframe::App for App {
                         ui.add_space(18.0);
                         prose(ui, &tones, &review.summary);
                         ui.separator();
+                        ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
+                        ui.add_space(6.0);
+                        let own = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| std::fs::read_to_string(std::path::Path::new(&open.dir).join(path).with_extension("mmd")).ok());
+                        let (source, touched) = match (&own, &open.data.system) {
+                            (Some(text), _) => (text.as_str(), None),
+                            (None, Some(system)) => (system.text.as_str(), Some(&system.touched)),
+                            _ => ("", None),
+                        };
+                        let (mut nodes, edges) = map::parse(source);
+                        if let Some(touched) = touched {
+                            nodes.iter_mut().for_each(|node| node.state = touched.contains_key(&node.id).then_some("changed"));
+                        }
+                        let caption = match (&review.map, touched) {
+                            (Some(map), None) => map.caption.clone(),
+                            _ => {
+                                let hit: Vec<&str> = nodes.iter().filter(|node| node.state.is_some()).map(|node| node.label.as_str()).collect();
+                                format!("Touches {} of {} parts of the system: {}", hit.len(), nodes.len(), hit.join(", "))
+                            }
+                        };
+                        egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.line)).inner_margin(14.0).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            if nodes.len() >= 2 {
+                                let look = map::Look { raised: tones.raised, top: tones.line.gamma_multiply(0.8), side: tones.line, edge: tones.dim, text: tones.strong };
+                                map::draw(ui, &look, &nodes, &edges);
+                                ui.label(RichText::new(caption).font(bold(13.5)).color(tones.strong));
+                                if let Some(text) = review.map.as_ref().and_then(|map| map.text.as_ref()).filter(|_| touched.is_none()) {
+                                    ui.label(RichText::new(text).size(13.0).color(tones.text));
+                                }
+                            } else if let Some(path) = review.map.as_ref().and_then(|map| map.path.as_ref()) {
+                                artifact(ui, &open.dir, path);
+                            } else {
+                                let mut folders: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
+                                for file in &open.data.files {
+                                    let row = folders.entry(file.path.split_once('/').map_or(".", |(folder, _)| folder)).or_default();
+                                    let count = |sign: char| file.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
+                                    *row = (row.0 + count('+'), row.1 + count('-'));
+                                }
+                                let most = folders.values().map(|(added, removed)| added + removed).max().unwrap_or(1).max(1) as f32;
+                                for (folder, (added, removed)) in &folders {
+                                    ui.horizontal(|ui| {
+                                        ui.add_sized([120.0, 16.0], egui::Label::new(RichText::new(*folder).font(mono(12.0)).color(tones.strong)).halign(egui::Align::Min));
+                                        let wide = (ui.available_width() - 130.0).max(40.0);
+                                        let (bar, _) = ui.allocate_exact_size(egui::vec2(wide, 10.0), egui::Sense::hover());
+                                        let green = bar.width() * *added as f32 / most;
+                                        ui.painter().rect_filled(egui::Rect::from_min_size(bar.min, egui::vec2(green, 10.0)), 0.0, Color32::from_rgb(47, 143, 85));
+                                        ui.painter().rect_filled(egui::Rect::from_min_size(bar.min + egui::vec2(green, 0.0), egui::vec2(bar.width() * *removed as f32 / most, 10.0)), 0.0, Color32::from_rgb(194, 71, 77));
+                                        ui.label(RichText::new(format!("+{added} −{removed}")).size(12.0).color(tones.dim));
+                                    });
+                                }
+                            }
+                        });
+                        ui.add_space(14.0);
                         ui.label(RichText::new("Read in this order").font(bold(14.0)).color(tones.strong));
                         for (part, section) in review.sections.iter().enumerate() {
                             ui.label(RichText::new(format!("{:02}  {}", part + 1, section.title)).font(bold(14.5)).color(tones.strong));
@@ -565,13 +645,13 @@ impl eframe::App for App {
                     }
                     Card::Part(part) => {
                         let section = &open.data.review.sections[part];
-                        ui.label(RichText::new(&section.title).size(25.0).color(tones.strong));
+                        ui.label(RichText::new(&section.title).font(serif(25.0)).color(tones.strong));
                         ui.label(RichText::new(&section.tier).font(mono(11.5)).color(tones.dim));
                         ui.add_space(10.0);
                         prose(ui, &tones, &section.why);
                     }
                     Card::Loose => {
-                        ui.label(RichText::new("Code in no part").size(25.0).color(tones.strong));
+                        ui.label(RichText::new("Code in no part").font(serif(25.0)).color(tones.strong));
                         prose(ui, &tones, "These hunks are in the diff, but the guide put them in no section. Nothing vouches for them: read them.");
                     }
                     Card::Item(n) => {
@@ -584,7 +664,7 @@ impl eframe::App for App {
                             });
                             ui.label(RichText::new(&item.id).font(mono(11.5)).color(tones.dim));
                         });
-                        ui.label(RichText::new(&item.title).size(25.0).color(tones.strong));
+                        ui.label(RichText::new(&item.title).font(serif(25.0)).color(tones.strong));
                         ui.add_space(8.0);
                         if item.kind != "good" {
                             ui.horizontal(|ui| {
@@ -610,6 +690,9 @@ impl eframe::App for App {
                                     ui.label(RichText::new(&evidence.provenance).font(mono(12.0)).color(ON_INK));
                                 });
                                 ui.label(RichText::new(&evidence.caption).font(bold(14.0)).color(Color32::WHITE));
+                                if let Some(path) = &evidence.path {
+                                    artifact(ui, &open.dir, path);
+                                }
                                 if let Some(text) = evidence.text.as_ref().filter(|text| !text.trim().is_empty()) {
                                     ui.label(RichText::new(text).font(mono(12.0)).color(ON_INK));
                                 }

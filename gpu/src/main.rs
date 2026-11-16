@@ -1046,9 +1046,14 @@ impl eframe::App for App {
                         open.contents = Some(open.at);
                     }
                     ui.add_space(10.0);
-                    turn += button(ui, &tones, &icon(Icon::ChevronRight, ""), false).on_hover_text("Next (l)").clicked() as isize;
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    let bare = |ui: &mut egui::Ui, icon: Icon, hint: &str, on: bool| {
+                        let made = ui.add_enabled(on, egui::Button::new(RichText::new(icon.unicode().to_string()).size(17.0).color(tones.strong)).frame(false));
+                        fx::touch(ui, made, tones.strong).on_hover_text(hint).clicked()
+                    };
+                    turn += bare(ui, Icon::ChevronRight, "Next (l)", open.at + 1 < open.cards.len()) as isize;
                     ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
-                    turn -= button(ui, &tones, &icon(Icon::ChevronLeft, ""), false).on_hover_text("Back (h)").clicked() as isize;
+                    turn -= bare(ui, Icon::ChevronLeft, "Back (h)", open.at > 0) as isize;
                 });
             });
             if open.chat.busy {

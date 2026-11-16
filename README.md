@@ -63,10 +63,13 @@ Two things it will not do:
 
 <p align="center"><img src="docs/app.gif" alt="revui as a Mac app: the list of reviews, a summary with a map of the system, a finding beside its diff, a comment on a line, and the publish preview" width="900"></p>
 
-The same review as a page, with the same keys. `revui web <link>` serves it in your browser, and the Mac app puts it in a window with the list of your reviews. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
+The same review as a page, with the same keys. The Mac app puts it in a window with the list of your reviews, and carries everything it needs. `revui web <link>` serves the page in your browser instead. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
 
-    revui web <link>                          # in a browser; --no-agent inside Herdr, Orca or Cursor
-    cd app && pnpm install && pnpm build      # the Mac app, from a checkout
+Both are built from a checkout of this repo for now: the released binary cannot run `revui web`, which also needs Node, and the app is not in the releases yet.
+
+    cd app && pnpm install && pnpm build                                # the Mac app
+    cargo install --path . && (cd web && pnpm install && pnpm build)    # once, for revui web
+    revui web <link>                                                    # --no-agent inside Herdr, Orca or Cursor
 
 [web/README.md](web/README.md) has the details.
 

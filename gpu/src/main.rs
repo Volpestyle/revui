@@ -1,6 +1,7 @@
 mod chat;
 mod host;
 mod map;
+mod play;
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Key, RichText, Stroke};
 use lucide_icons::Icon;
@@ -298,7 +299,7 @@ impl Open {
 
     fn said(&self, n: usize) -> String {
         let thread = &self.data.threads[n];
-        let who = thread.notes.first().map_or("", |note| note.0.as_str());
+        let who = thread.notes.first().map_or("", |note| note.0.trim_start_matches('@'));
         match (&thread.file, thread.line) {
             (Some(file), Some(line)) => format!("@{who} on {file}:{line}"),
             _ => format!("@{who} on the whole merge request"),
@@ -398,8 +399,9 @@ struct App {
     open: Option<Open>,
     problem: String,
     link: String,
-    frames: u32,
-    script: Vec<String>,
+    play: play::Play,
+    dressed: Option<bool>,
+    captured: std::sync::Arc<std::sync::atomic::AtomicU32>,
     tab: bool,
 }
 
@@ -419,7 +421,7 @@ impl App {
         cc.egui_ctx.set_fonts(fonts);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
         let named = host::named();
-        let mut app = Self { reviews: Vec::new(), open: None, problem: String::new(), link: String::new(), frames: 0, script: std::env::var("REVUI_GPU_KEYS").map(|keys| keys.split(',').map(String::from).collect()).unwrap_or_default(), tab: false };
+        let mut app = Self { reviews: Vec::new(), open: None, problem: String::new(), link: String::new(), play: play::Play::load(), dressed: None, captured: Default::default(), tab: false };
         match named {
             Some(dir) => app.show(&dir),
             None => app.list(),
@@ -502,21 +504,8 @@ fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Resp
 }
 
 impl eframe::App for App {
-    /// Plays REVUI_GPU_KEYS, one key or `text:` entry every few frames: how the interface is checked and recorded with no one at the keyboard.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        let entry = self.frames.checked_sub(6).filter(|frame| frame % 8 == 0).and_then(|frame| self.script.get((frame / 8) as usize)).cloned().unwrap_or_default();
-        match (entry.strip_prefix("text:"), Key::from_name(&entry)) {
-            (Some(text), _) => raw.events.push(egui::Event::Text(text.into())),
-            (None, Some(key)) => {
-                for pressed in [true, false] {
-                    raw.events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Default::default() });
-                }
-                if let (1, Some(letter)) = (entry.len(), entry.chars().next()) {
-                    raw.events.push(egui::Event::Text(letter.to_lowercase().to_string()));
-                }
-            }
-            _ => {}
-        }
+        self.play.step(raw);
         // Tab moves between the card and the diff here, as in the terminal, so it never reaches egui's own walk through the widgets.
         if self.open.is_some() {
             let before = raw.events.len();
@@ -528,19 +517,49 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let tones = tones(ui.visuals().dark_mode);
         let ctx = ui.ctx().clone();
-        self.frames += 1;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let (true, Ok(path)) = (self.frames == 12 + 8 * self.script.len() as u32, std::env::var("REVUI_GPU_SHOT")) {
-            let quit = ctx.clone();
-            ctx.request_screenshot(move |image| {
-                let file = std::fs::File::create(&path).expect("screenshot file");
-                let mut encoder = png::Encoder::new(file, image.width() as u32, image.height() as u32);
-                encoder.set_color(png::ColorType::Rgba);
-                let _ = encoder.write_header().and_then(|mut writer| writer.write_image_data(image.as_raw()));
-                quit.send_viewport_cmd(egui::ViewportCommand::Close);
-            });
+        self.play.draw(&ctx);
+        let middle = ui.max_rect().center();
+        if self.dressed != Some(ui.visuals().dark_mode) {
+            self.dressed = Some(ui.visuals().dark_mode);
+            let mut visuals = ui.visuals().clone();
+            (visuals.window_corner_radius, visuals.menu_corner_radius) = (0.into(), 0.into());
+            (visuals.window_fill, visuals.panel_fill, visuals.extreme_bg_color) = (tones.raised, tones.bg, if ui.visuals().dark_mode { INK } else { Color32::WHITE });
+            (visuals.window_stroke, visuals.window_shadow) = (Stroke::new(1.0, tones.strong), egui::Shadow::NONE);
+            (visuals.selection.bg_fill, visuals.selection.stroke) = (tones.accent, Stroke::new(1.0, tones.on_accent));
+            for look in [&mut visuals.widgets.noninteractive, &mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active, &mut visuals.widgets.open] {
+                look.corner_radius = 0.into();
+            }
+            visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, tones.line);
+            visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, tones.text);
+            visuals.override_text_color = Some(tones.text);
+            ctx.set_visuals(visuals);
         }
-        if self.frames < 16 + 8 * self.script.len() as u32 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let save = |path: String, quit: Option<egui::Context>| {
+                move |image: std::sync::Arc<egui::ColorImage>| {
+                    let Ok(file) = std::fs::File::create(&path) else { return };
+                    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), image.width() as u32, image.height() as u32);
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_compression(png::Compression::Fast);
+                    let _ = encoder.write_header().and_then(|mut writer| writer.write_image_data(image.as_raw()));
+                    if let Some(quit) = quit {
+                        quit.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            };
+            if let Ok(dir) = std::env::var("REVUI_GPU_FRAMES") {
+                let n = self.captured.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ctx.request_screenshot(save(format!("{dir}/{n:06}.png"), None));
+                if self.play.finished() {
+                    let _ = std::fs::write(format!("{dir}/events.json"), self.play.marks());
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            } else if let (true, Ok(path)) = (self.play.settled(), std::env::var("REVUI_GPU_SHOT")) {
+                ctx.request_screenshot(save(path, Some(ctx.clone())));
+            }
+        }
+        if self.play.running() {
             ctx.request_repaint();
         }
         let frame = egui::Frame::new().fill(tones.bg);
@@ -883,7 +902,7 @@ impl eframe::App for App {
                         ui.label(RichText::new(if thread.resolved { "resolved · already on the merge request" } else { "already on the merge request" }).font(mono(11.5)).color(tones.dim));
                         for (who, body, when) in &thread.notes {
                             ui.add_space(10.0);
-                            ui.label(RichText::new(format!("@{who} · {when}")).font(bold(13.0)).color(tones.strong));
+                            ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(bold(13.0)).color(tones.strong));
                             prose(ui, &tones, body);
                         }
                     }
@@ -980,7 +999,11 @@ impl eframe::App for App {
                     field.request_focus();
                     field.scroll_to_me(None);
                 }
-                if button(ui, &tones, "Save comment", false).clicked() {
+                let sent = field.has_focus() && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
+                if sent {
+                    field.surrender_focus();
+                }
+                if button(ui, &tones, "Save comment", false).on_hover_text("Cmd-Enter").clicked() || sent {
                     if let Err(problem) = open.comment() {
                         open.note = problem;
                     }
@@ -991,7 +1014,7 @@ impl eframe::App for App {
 
         if let Some((mut choice, mut text)) = open.publish.take() {
             let (mut keep, mut send) = (true, false);
-            egui::Window::new("Publish your review").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| {
+            egui::Window::new(RichText::new("Publish your review").font(serif(20.0)).color(tones.strong)).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).fixed_pos(middle).show(&ctx, |ui| {
                 ui.set_width(680.0);
                 ui.label(RichText::new("This is exactly what goes to the merge request. Nothing is posted until you confirm.").color(tones.text));
                 for (n, how) in open.data.finish.iter().enumerate() {
@@ -1018,11 +1041,12 @@ impl eframe::App for App {
             let mut go = None;
             let (down, enter, leave) = ctx.input(|input| ((input.key_pressed(Key::J) || input.key_pressed(Key::ArrowDown)) as isize - (input.key_pressed(Key::K) || input.key_pressed(Key::ArrowUp)) as isize, input.key_pressed(Key::Enter), input.key_pressed(Key::Escape)));
             on = (on as isize + down).clamp(0, open.cards.len() as isize - 1) as usize;
-            egui::Window::new("Contents").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| {
+            egui::Window::new(RichText::new("Contents").font(serif(20.0)).color(tones.strong)).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).fixed_pos(middle).show(&ctx, |ui| {
                 ui.set_min_width(520.0);
                 for (n, card) in open.cards.iter().enumerate() {
                     let label = RichText::new(open.label(*card)).font(if matches!(card, Card::Item(_)) { mono(12.5) } else { bold(13.5) });
-                    if ui.selectable_label(n == on, label).clicked() {
+                    let label = if n == on { label.color(tones.on_accent) } else { label.color(tones.strong) };
+                    if ui.add_sized([520.0, 24.0], egui::Button::selectable(n == on, label).right_text("")).clicked() {
                         go = Some(n);
                     }
                 }

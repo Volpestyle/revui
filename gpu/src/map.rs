@@ -202,3 +202,19 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge]) {
         painter.text(spot, Align2::CENTER_BOTTOM, &node.label, FontId::new(13.0, egui::FontFamily::Name("bold".into())), look.text);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_flowchart_the_guide_writes() {
+        let (nodes, edges) = parse("flowchart LR\n  web[Customer web] --> api[Orders API]\n  api --> db[(Orders table)]\n  api -. new .-> queue[[Retry queue]]\n  classDef changed stroke:#e8a33d\n  class api changed\n  class queue added\n%% api: src/");
+        let found = |id: &str| nodes.iter().find(|node| node.id == id).unwrap();
+        assert_eq!(nodes.len(), 4);
+        assert_eq!((found("api").label.as_str(), found("api").state), ("Orders API", Some("changed")));
+        assert!(found("db").form == Form::Store && found("queue").form == Form::Queue && found("queue").state == Some("added"));
+        assert_eq!(edges.len(), 3);
+        assert!(edges[2].new && edges[2].label == "new" && edges[2].to == "queue");
+    }
+}

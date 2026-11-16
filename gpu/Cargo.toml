@@ -7,6 +7,7 @@ edition = "2024"
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "wgpu"] }
 egui_extras = { version = "0.37.0", features = ["image", "file"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+lucide-icons = "1.73.0"
 png = "0.18.1"
 regex = "1.13.1"
 serde = { version = "1", features = ["derive"] }

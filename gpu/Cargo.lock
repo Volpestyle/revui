@@ -1741,6 +1741,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
+name = "lucide-icons"
+version = "1.73.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c54114e039d68d862d3831acca8a658f091ff6d5600dcb0208cf3c339104a14f"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2738,6 +2744,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "image",
+ "lucide-icons",
  "png",
  "regex",
  "serde",

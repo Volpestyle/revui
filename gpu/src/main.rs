@@ -2,6 +2,7 @@ mod chat;
 mod map;
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Key, RichText, Stroke};
+use lucide_icons::Icon;
 use serde::Deserialize;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -88,6 +89,17 @@ struct Data {
     finish: Vec<String>,
     system: Option<System>,
     claude: String,
+    threads: Vec<Thread>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+struct Thread {
+    id: String,
+    file: Option<String>,
+    line: Option<u32>,
+    resolved: bool,
+    notes: Vec<(String, String, String)>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -111,6 +123,7 @@ enum Card {
     Part(usize),
     Item(usize),
     Note(usize),
+    Thread(usize),
     Loose,
 }
 
@@ -194,6 +207,8 @@ struct Open {
     chat: chat::Chat,
     agent: bool,
     ask: bool,
+    stamp: Option<std::time::SystemTime>,
+    looked: std::time::Instant,
 }
 
 impl Open {
@@ -205,12 +220,30 @@ impl Open {
             cards.extend(data.review.items.iter().enumerate().filter(|(_, item)| item.section == Some(part)).map(|(n, _)| Card::Item(n)));
         }
         cards.extend(data.review.items.iter().enumerate().filter(|(_, item)| item.section.is_none_or(|part| part >= data.review.sections.len())).map(|(n, _)| Card::Item(n)));
+        cards.extend((0..data.threads.len()).map(Card::Thread));
         cards.extend(data.state["notes"].as_array().into_iter().flatten().enumerate().filter(|(_, note)| note["posted"] != true).map(|(n, _)| Card::Note(n)));
         if data.groups.len() > data.review.sections.len() {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false })
+        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, stamp: Self::changed(dir), looked: std::time::Instant::now() })
+    }
+
+    fn changed(dir: &str) -> Option<std::time::SystemTime> {
+        ["review.json", "state.json", "threads.json"].iter().filter_map(|name| std::fs::metadata(std::path::Path::new(dir).join(name)).and_then(|file| file.modified()).ok()).max()
+    }
+
+    /// Picks up what the agent, or the terminal viewer, wrote to the bundle since it was last read.
+    fn watch(&mut self) {
+        if self.looked.elapsed().as_millis() < 700 {
+            return;
+        }
+        self.looked = std::time::Instant::now();
+        let stamp = Self::changed(&self.dir);
+        if stamp != self.stamp {
+            self.stamp = stamp;
+            let _ = self.refresh();
+        }
     }
 
     fn group(&self) -> Option<usize> {
@@ -223,6 +256,7 @@ impl Open {
                 let file = note["file"].as_str().or_else(|| self.data.review.items.iter().find(|item| Some(item.id.as_str()) == note["item"].as_str()).and_then(|item| item.at.as_ref().map(|at| at.file.as_str())));
                 file.and_then(|file| self.data.groups.iter().position(|group| group.iter().any(|&(f, _)| self.data.files[f].path == file)))
             }
+            Card::Thread(n) => self.data.threads[n].file.as_ref().and_then(|file| self.data.groups.iter().position(|group| group.iter().any(|&(f, _)| &self.data.files[f].path == file))),
             Card::Loose => Some(self.data.review.sections.len()),
         }
         .filter(|group| *group < self.data.groups.len())
@@ -234,6 +268,7 @@ impl Open {
             Card::Part(part) => format!("{}. {}", part + 1, self.data.review.sections[part].title),
             Card::Item(n) => format!("{} {}", self.data.review.items[n].id, self.data.review.items[n].title),
             Card::Note(n) => self.about(n),
+            Card::Thread(n) => self.said(n),
             Card::Loose => "Code in no part".into(),
         }
     }
@@ -260,6 +295,15 @@ impl Open {
                 self.chat.send(ctx, &self.dir.clone(), &claude, format!("{prompt}{text}"), shown);
             }
             Err(problem) => self.note = problem,
+        }
+    }
+
+    fn said(&self, n: usize) -> String {
+        let thread = &self.data.threads[n];
+        let who = thread.notes.first().map_or("", |note| note.0.as_str());
+        match (&thread.file, thread.line) {
+            (Some(file), Some(line)) => format!("@{who} on {file}:{line}"),
+            _ => format!("@{who} on the whole merge request"),
         }
     }
 
@@ -297,7 +341,7 @@ impl Open {
 
     fn refresh(&mut self) -> Result<(), String> {
         let fresh = Self::load(&self.dir)?;
-        (self.data, self.cards) = (fresh.data, fresh.cards);
+        (self.data, self.cards, self.stamp) = (fresh.data, fresh.cards, fresh.stamp);
         self.painted.clear();
         self.at = self.at.min(self.cards.len() - 1);
         Ok(())
@@ -332,9 +376,13 @@ impl Open {
             Card::Item(n) => Some(self.data.review.items[n].id.clone()),
             _ => None,
         };
+        let reply = match self.cards[self.at] {
+            Card::Thread(n) => Some(self.data.threads[n].id.clone()),
+            _ => None,
+        };
         let note = match picked {
             Some((file, line, old)) => serde_json::json!({ "text": text, "file": file, "line": line, "start": null, "old": old, "item": null, "reply_to": null, "posted": false }),
-            None => serde_json::json!({ "text": text, "file": null, "line": null, "start": null, "old": false, "item": item, "reply_to": null, "posted": false }),
+            None => serde_json::json!({ "text": text, "file": null, "line": null, "start": null, "old": false, "item": item, "reply_to": reply, "posted": false }),
         };
         let mut state = self.data.state.clone();
         match state["notes"].as_array_mut() {
@@ -367,6 +415,8 @@ impl App {
         fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "geist-mono".into());
         fonts.families.insert(FontFamily::Name("bold".into()), vec!["geist-bold".into(), "geist".into()]);
         fonts.families.insert(FontFamily::Name("serif".into()), vec!["geist-serif".into(), "geist".into()]);
+        fonts.font_data.insert("lucide".into(), std::sync::Arc::new(egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES)));
+        fonts.families.values_mut().for_each(|family| family.push("lucide".into()));
         egui_extras::install_image_loaders(&cc.egui_ctx);
         cc.egui_ctx.set_fonts(fonts);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
@@ -411,6 +461,22 @@ fn artifact(ui: &mut egui::Ui, dir: &str, path: &str) {
         true => drop(ui.add(egui::Image::new(format!("file://{}", full.display())).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(0.0))),
         false => drop(ui.hyperlink_to(format!("Open {path}"), format!("file://{}", full.display()))),
     }
+}
+
+/// The revui mark: a sheet with a check, drawn in the colours of the appearance.
+fn logo(ui: &mut egui::Ui, size: f32) {
+    let dark = ui.visuals().dark_mode;
+    let (back, body, check) = if dark { (Color32::from_rgb(169, 172, 247), Color32::from_rgb(243, 244, 248), Color32::from_rgb(8, 9, 12)) } else { (Color32::from_rgb(91, 110, 225), Color32::from_rgb(8, 9, 12), Color32::from_rgb(243, 244, 248)) };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let at = |x: f32, y: f32| rect.min + egui::vec2(x, y) * (size / 111.0);
+    let painter = ui.painter();
+    painter.line(vec![at(11.0, 3.25), at(74.65, 3.25), at(107.75, 36.35), at(107.75, 100.0)], Stroke::new(6.5 * size / 111.0, back));
+    painter.add(egui::Shape::convex_polygon(vec![at(0.0, 11.0), at(65.0, 11.0), at(100.0, 46.0), at(100.0, 111.0), at(0.0, 111.0)], body, Stroke::NONE));
+    painter.line(vec![at(24.0, 64.0), at(42.0, 82.0), at(76.0, 48.0)], Stroke::new(11.0 * size / 111.0, check));
+}
+
+fn icon(icon: Icon, label: &str) -> String {
+    if label.is_empty() { icon.unicode().to_string() } else { format!("{}  {label}", icon.unicode()) }
 }
 
 fn mono(size: f32) -> FontId {
@@ -486,7 +552,10 @@ impl eframe::App for App {
                 ui.vertical_centered(|ui| {
                     ui.set_max_width(680.0);
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.label(RichText::new("revui").font(bold(24.0)).color(tones.strong));
+                        ui.horizontal(|ui| {
+                            logo(ui, 26.0);
+                            ui.label(RichText::new("revui").font(serif(24.0)).color(tones.strong));
+                        });
                         ui.add_space(14.0);
                         ui.label(RichText::new("Merge request or pull request link").font(bold(13.0)).color(tones.strong));
                         ui.horizontal(|ui| {
@@ -571,6 +640,8 @@ impl eframe::App for App {
             open.tell(&ctx, "artifact", "");
         }
         open.chat.take();
+        open.watch();
+        ctx.request_repaint_after(std::time::Duration::from_millis(800));
         if pressed(Key::P) {
             open.publish = Some((0, open.data.preview.clone()));
         }
@@ -586,16 +657,17 @@ impl eframe::App for App {
 
         egui::Panel::top("bar").frame(frame.inner_margin(egui::Margin::symmetric(16, 9))).show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("revui").font(bold(14.0)).color(tones.strong));
+                logo(ui, 20.0);
                 ui.label(RichText::new(&open.data.review.title).font(serif(16.0)).color(tones.strong));
                 ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if button(ui, &tones, &format!("Publish {}", open.data.outgoing), true).clicked() {
+                    let count = if open.data.outgoing > 0 { open.data.outgoing.to_string() } else { String::new() };
+                    if button(ui, &tones, &icon(Icon::Send, &count), true).on_hover_text("Publish (p)").clicked() {
                         open.publish = Some((0, open.data.preview.clone()));
                     }
-                    open.agent ^= button(ui, &tones, if open.chat.busy { "Agent · working" } else { "Agent" }, open.agent).clicked();
-                    open.diff ^= button(ui, &tones, "Diff", open.diff).clicked();
-                    if button(ui, &tones, "Contents", false).clicked() {
+                    open.agent ^= button(ui, &tones, &icon(Icon::Bot, if open.chat.busy { "working" } else { "" }), open.agent).on_hover_text("Agent (t)").clicked();
+                    open.diff ^= button(ui, &tones, &icon(Icon::FileDiff, ""), open.diff).on_hover_text("Diff (d)").clicked();
+                    if button(ui, &tones, &icon(Icon::List, ""), false).on_hover_text("Contents (b)").clicked() {
                         open.contents = Some(open.at);
                     }
                 });
@@ -619,10 +691,10 @@ impl eframe::App for App {
                     }
                     let entered = field.has_focus() && ui.input(|input| input.key_pressed(Key::Enter) && !input.modifiers.shift);
                     ui.horizontal(|ui| {
-                        let verify = button(ui, &tones, "Verify", false).clicked();
-                        let draw = button(ui, &tones, "Diagram", false).clicked();
-                        let stop = open.chat.busy && button(ui, &tones, "Stop", false).clicked();
-                        let send = !open.chat.busy && (button(ui, &tones, "Send", true).clicked() || entered);
+                        let verify = button(ui, &tones, &icon(Icon::ShieldCheck, "Verify"), false).clicked();
+                        let draw = button(ui, &tones, &icon(Icon::Workflow, "Diagram"), false).clicked();
+                        let stop = open.chat.busy && button(ui, &tones, &icon(Icon::Square, "Stop"), false).clicked();
+                        let send = !open.chat.busy && (button(ui, &tones, &icon(Icon::ArrowUp, "Send"), true).clicked() || entered);
                         if stop {
                             open.chat.stop();
                         }
@@ -803,12 +875,22 @@ impl eframe::App for App {
                         ui.add_space(10.0);
                         prose(ui, &tones, &section.why);
                     }
+                    Card::Thread(n) => {
+                        let thread = open.data.threads[n].clone();
+                        ui.label(RichText::new(open.said(n)).font(serif(25.0)).color(tones.strong));
+                        ui.label(RichText::new(if thread.resolved { "resolved · already on the merge request" } else { "already on the merge request" }).font(mono(11.5)).color(tones.dim));
+                        for (who, body, when) in &thread.notes {
+                            ui.add_space(10.0);
+                            ui.label(RichText::new(format!("@{who} · {when}")).font(bold(13.0)).color(tones.strong));
+                            prose(ui, &tones, body);
+                        }
+                    }
                     Card::Note(n) => {
                         let text = open.data.state["notes"][n]["text"].as_str().unwrap_or("").to_string();
                         ui.label(RichText::new(open.about(n)).font(serif(25.0)).color(tones.strong));
                         ui.add_space(10.0);
                         prose(ui, &tones, &text);
-                        if button(ui, &tones, "Delete this comment", false).clicked() {
+                        if button(ui, &tones, &icon(Icon::Trash2, "Delete this comment"), false).clicked() {
                             let mut state = open.data.state.clone();
                             if let Some(notes) = state["notes"].as_array_mut() {
                                 notes.remove(n);
@@ -836,10 +918,10 @@ impl eframe::App for App {
                         ui.add_space(8.0);
                         if item.kind != "good" {
                             ui.horizontal(|ui| {
-                                if button(ui, &tones, "Agree", verdict.as_deref() == Some("agree")).clicked() {
+                                if button(ui, &tones, &icon(Icon::Check, "Agree"), verdict.as_deref() == Some("agree")).clicked() {
                                     marked = Some((item.id.clone(), "agree"));
                                 }
-                                if button(ui, &tones, "Dismiss", verdict.as_deref() == Some("dismiss")).clicked() {
+                                if button(ui, &tones, &icon(Icon::X, "Dismiss"), verdict.as_deref() == Some("dismiss")).clicked() {
                                     marked = Some((item.id.clone(), "dismiss"));
                                 }
                             });
@@ -872,6 +954,7 @@ impl eframe::App for App {
                 let about = match (open.lines().get(open.line).filter(|_| open.in_diff), open.cards[open.at]) {
                     (Some((file, line, _)), _) => format!("Comment on {file}:{line}"),
                     (None, Card::Item(n)) => format!("Comment on {}", open.data.review.items[n].id),
+                    (None, Card::Thread(_)) => "Reply in this thread".into(),
                     _ => "Comment on the whole merge request".into(),
                 };
                 ui.label(RichText::new(about).font(bold(14.0)).color(tones.strong));
@@ -900,7 +983,7 @@ impl eframe::App for App {
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| ui.add(egui::TextEdit::multiline(&mut text).font(mono(12.0)).desired_width(f32::INFINITY)));
                 ui.horizontal(|ui| {
                     keep = !button(ui, &tones, "Cancel", false).clicked() && !ui.input(|input| input.key_pressed(Key::Escape));
-                    send = button(ui, &tones, "Publish", true).clicked();
+                    send = button(ui, &tones, &icon(Icon::Send, "Publish"), true).clicked();
                 });
             });
             if send {

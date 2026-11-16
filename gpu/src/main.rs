@@ -1,11 +1,11 @@
 mod chat;
+mod host;
 mod map;
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Key, RichText, Stroke};
 use lucide_icons::Icon;
 use serde::Deserialize;
-use std::io::Write;
-use std::process::{Command, Stdio};
+use host::run as revui;
 
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
@@ -176,19 +176,6 @@ fn tones(dark: bool) -> Tones {
     }
 }
 
-fn revui(args: &[&str], input: Option<&str>) -> Result<String, String> {
-    let bin = std::env::var("REVUI_BIN").unwrap_or_else(|_| "revui".into());
-    let mut child = Command::new(bin).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("revui: {e}"))?;
-    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
-        let _ = stdin.write_all(input.as_bytes());
-    }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    match out.status.success() {
-        true => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
-        false => Err(String::from_utf8_lossy(&out.stderr).lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("revui failed").trim().to_string()),
-    }
-}
-
 struct Open {
     dir: String,
     data: Data,
@@ -208,8 +195,8 @@ struct Open {
     chat: chat::Chat,
     agent: bool,
     ask: bool,
-    stamp: Option<std::time::SystemTime>,
-    looked: std::time::Instant,
+    stamp: String,
+    looked: f64,
 }
 
 impl Open {
@@ -227,22 +214,17 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, stamp: Self::changed(dir), looked: std::time::Instant::now() })
-    }
-
-    fn changed(dir: &str) -> Option<std::time::SystemTime> {
-        ["review.json", "state.json", "threads.json"].iter().filter_map(|name| std::fs::metadata(std::path::Path::new(dir).join(name)).and_then(|file| file.modified()).ok()).max()
+        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, stamp: host::stamp(dir), looked: 0.0 })
     }
 
     /// Picks up what the agent, or the terminal viewer, wrote to the bundle since it was last read.
-    fn watch(&mut self) {
-        if self.looked.elapsed().as_millis() < 700 {
+    fn watch(&mut self, now: f64) {
+        if now - self.looked < 0.7 {
             return;
         }
-        self.looked = std::time::Instant::now();
-        let stamp = Self::changed(&self.dir);
+        self.looked = now;
+        let stamp = host::stamp(&self.dir);
         if stamp != self.stamp {
-            self.stamp = stamp;
             let _ = self.refresh();
         }
     }
@@ -288,6 +270,9 @@ impl Open {
         let all: Vec<Past> = revui(&["list"], None).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
         let repo = all.iter().find(|past| past.dir == self.dir).map(|past| past.repo.clone()).unwrap_or_default();
         let known = all.iter().find(|past| !repo.is_empty() && past.repo == repo && std::path::Path::new(&past.cwd).is_dir() && !past.cwd.is_empty()).map(|past| past.cwd.clone());
+        #[cfg(target_arch = "wasm32")]
+        return known.or(Some(String::new()));
+        #[cfg(not(target_arch = "wasm32"))]
         known.or_else(|| rfd::FileDialog::new().set_title(format!("Where is your checkout of {}? The agent starts there.", if repo.is_empty() { "this code" } else { &repo })).pick_folder().map(|folder| folder.to_string_lossy().into_owned()))
     }
 
@@ -299,9 +284,9 @@ impl Open {
         match revui(&args, None) {
             Ok(prompt) => {
                 let prompt = prompt.trim_end_matches('\n').to_string();
-                let shown = if text.is_empty() { format!("{mode} {}", on.unwrap_or_default()) } else { text.to_string() };
+                let shown = if text.is_empty() { format!("{mode} {}", on.clone().unwrap_or_default()) } else { text.to_string() };
                 let (claude, Some(folder)) = (self.data.claude.clone(), self.folder()) else { return self.note = "The agent needs the folder of the code under review.".into() };
-                self.chat.send(ctx, &self.dir.clone(), &claude, &folder, format!("{prompt}{text}"), shown);
+                self.chat.send(ctx, &self.dir.clone(), &claude, &folder, (mode, on.as_deref()), format!("{prompt}{text}"), shown);
             }
             Err(problem) => self.note = problem,
         }
@@ -429,7 +414,7 @@ impl App {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         cc.egui_ctx.set_fonts(fonts);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
-        let named = std::env::args().nth(1);
+        let named = host::named();
         let mut app = Self { reviews: Vec::new(), open: None, problem: String::new(), link: String::new(), frames: 0, script: std::env::var("REVUI_GPU_KEYS").map(|keys| keys.split(',').map(String::from).collect()).unwrap_or_default(), tab: false };
         match named {
             Some(dir) => app.show(&dir),
@@ -464,11 +449,10 @@ fn serif(size: f32) -> FontId {
 
 /// A picture from the bundle shown in place; anything else it holds (a recording, a file) as a link that opens it.
 fn artifact(ui: &mut egui::Ui, dir: &str, path: &str) {
-    let full = std::path::Path::new(dir).join(path);
-    let shown = matches!(full.extension().and_then(|kind| kind.to_str()), Some("png" | "jpg" | "jpeg" | "gif" | "webp"));
+    let shown = matches!(std::path::Path::new(path).extension().and_then(|kind| kind.to_str()), Some("png" | "jpg" | "jpeg" | "gif" | "webp"));
     match shown {
-        true => drop(ui.add(egui::Image::new(format!("file://{}", full.display())).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(0.0))),
-        false => drop(ui.hyperlink_to(format!("Open {path}"), format!("file://{}", full.display()))),
+        true => drop(ui.add(egui::Image::new(host::uri(dir, path)).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(0.0))),
+        false => drop(ui.hyperlink_to(format!("Open {path}"), host::uri(dir, path))),
     }
 }
 
@@ -541,6 +525,7 @@ impl eframe::App for App {
         let tones = tones(ui.visuals().dark_mode);
         let ctx = ui.ctx().clone();
         self.frames += 1;
+        #[cfg(not(target_arch = "wasm32"))]
         if let (true, Ok(path)) = (self.frames == 12 + 8 * self.script.len() as u32, std::env::var("REVUI_GPU_SHOT")) {
             let quit = ctx.clone();
             ctx.request_screenshot(move |image| {
@@ -649,7 +634,7 @@ impl eframe::App for App {
             open.tell(&ctx, "artifact", "");
         }
         open.chat.take();
-        open.watch();
+        open.watch(ctx.input(|input| input.time));
         ctx.request_repaint_after(std::time::Duration::from_millis(800));
         if pressed(Key::P) {
             open.publish = Some((0, open.data.preview.clone()));
@@ -822,7 +807,7 @@ impl eframe::App for App {
                         ui.separator();
                         ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
                         ui.add_space(6.0);
-                        let own = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| std::fs::read_to_string(std::path::Path::new(&open.dir).join(path).with_extension("mmd")).ok());
+                        let own = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| host::text(&open.dir, &std::path::Path::new(path).with_extension("mmd").to_string_lossy()));
                         let (source, touched) = match (&own, &open.data.system) {
                             (Some(text), _) => (text.as_str(), None),
                             (None, Some(system)) => (system.text.as_str(), Some(&system.touched)),
@@ -1033,7 +1018,9 @@ impl eframe::App for App {
 }
 
 /// Started from the Dock, an app gets a bare PATH and no revui: take the PATH a login shell builds, and the revui that ships beside this binary.
+#[cfg(not(target_arch = "wasm32"))]
 fn settle() {
+    use std::process::{Command, Stdio};
     let beside = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join("revui"))).filter(|bin| bin.exists());
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let asked = Command::new(shell).args(["-ilc", "printf '\\n%s' \"$PATH\""]).stdin(Stdio::null()).stderr(Stdio::null()).output();
@@ -1049,8 +1036,18 @@ fn settle() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     settle();
     let options = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1360.0, 900.0]).with_title("revui"), ..Default::default() };
     eframe::run_native("revui", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use eframe::wasm_bindgen::JsCast as _;
+    wasm_bindgen_futures::spawn_local(async {
+        let canvas = web_sys::window().and_then(|window| window.document()).and_then(|document| document.get_element_by_id("revui")).and_then(|found| found.dyn_into::<web_sys::HtmlCanvasElement>().ok()).expect("the page has a canvas");
+        eframe::WebRunner::new().start(canvas, eframe::WebOptions::default(), Box::new(|cc| Ok(Box::new(App::new(cc))))).await.expect("revui could not start");
+    });
 }

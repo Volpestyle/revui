@@ -64,6 +64,8 @@ struct Data {
     groups: Vec<Vec<(usize, usize)>>,
     state: serde_json::Value,
     outgoing: usize,
+    preview: String,
+    finish: Vec<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -134,7 +136,15 @@ struct Open {
     cards: Vec<Card>,
     at: usize,
     diff: bool,
-    contents: bool,
+    contents: Option<usize>,
+    in_diff: bool,
+    line: usize,
+    moved: bool,
+    proof: usize,
+    draft: String,
+    compose: bool,
+    publish: Option<(usize, String)>,
+    note: String,
 }
 
 impl Open {
@@ -150,7 +160,7 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: false })
+        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new() })
     }
 
     fn group(&self) -> Option<usize> {
@@ -187,10 +197,62 @@ impl Open {
             }
         }
         state["finished"] = serde_json::Value::Null;
+        self.save(state)
+    }
+
+    fn save(&mut self, state: serde_json::Value) -> Result<(), String> {
         revui(&["state", &self.dir], Some(&state.to_string()))?;
-        let at = self.at;
-        *self = Self { at, diff: self.diff, ..Self::load(&self.dir)? };
+        self.refresh()
+    }
+
+    fn refresh(&mut self) -> Result<(), String> {
+        let fresh = Self::load(&self.dir)?;
+        (self.data, self.cards) = (fresh.data, fresh.cards);
+        self.at = self.at.min(self.cards.len() - 1);
         Ok(())
+    }
+
+    /// The lines of the diff a cursor can sit on, in the order they are drawn: the file, the line number, and whether it is a removed line.
+    fn lines(&self) -> Vec<(String, u32, bool)> {
+        let mut all = Vec::new();
+        for &(file, hunk) in self.group().map(|group| self.data.groups[group].as_slice()).unwrap_or_default() {
+            let (path, hunk) = (&self.data.files[file].path, &self.data.files[file].hunks[hunk]);
+            let (mut old, mut new) = (hunk.old_start, hunk.new_start);
+            for line in &hunk.lines {
+                match line.chars().next().unwrap_or(' ') {
+                    '-' => (all.push((path.clone(), old, true)), old += 1).1,
+                    '+' => (all.push((path.clone(), new, false)), new += 1).1,
+                    '\\' => {}
+                    _ => (all.push((path.clone(), new, false)), old += 1, new += 1).2,
+                }
+            }
+        }
+        all
+    }
+
+    /// Adds the draft as a comment: on the diff line under the cursor, on the finding shown, or on the whole merge request.
+    fn comment(&mut self) -> Result<(), String> {
+        let text = self.draft.trim().to_string();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let picked = self.lines().get(self.line).cloned().filter(|_| self.in_diff);
+        let item = match self.cards[self.at] {
+            Card::Item(n) => Some(self.data.review.items[n].id.clone()),
+            _ => None,
+        };
+        let note = match picked {
+            Some((file, line, old)) => serde_json::json!({ "text": text, "file": file, "line": line, "start": null, "old": old, "item": null, "reply_to": null, "posted": false }),
+            None => serde_json::json!({ "text": text, "file": null, "line": null, "start": null, "old": false, "item": item, "reply_to": null, "posted": false }),
+        };
+        let mut state = self.data.state.clone();
+        match state["notes"].as_array_mut() {
+            Some(notes) => notes.push(note),
+            None => state["notes"] = serde_json::json!([note]),
+        }
+        state["finished"] = serde_json::Value::Null;
+        self.draft.clear();
+        self.save(state)
     }
 }
 
@@ -198,7 +260,10 @@ struct App {
     reviews: Vec<Past>,
     open: Option<Open>,
     problem: String,
+    link: String,
     frames: u32,
+    script: Vec<String>,
+    tab: bool,
 }
 
 impl App {
@@ -213,7 +278,7 @@ impl App {
         cc.egui_ctx.set_fonts(fonts);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
         let named = std::env::args().nth(1);
-        let mut app = Self { reviews: Vec::new(), open: None, problem: String::new(), frames: 0 };
+        let mut app = Self { reviews: Vec::new(), open: None, problem: String::new(), link: String::new(), frames: 0, script: std::env::var("REVUI_GPU_KEYS").map(|keys| keys.split(',').map(String::from).collect()).unwrap_or_default(), tab: false };
         match named {
             Some(dir) => app.show(&dir),
             None => app.list(),
@@ -267,11 +332,34 @@ fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Resp
 }
 
 impl eframe::App for App {
+    /// Plays REVUI_GPU_KEYS, one key or `text:` entry every few frames: how the interface is checked and recorded with no one at the keyboard.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let entry = self.frames.checked_sub(6).filter(|frame| frame % 8 == 0).and_then(|frame| self.script.get((frame / 8) as usize)).cloned().unwrap_or_default();
+        match (entry.strip_prefix("text:"), Key::from_name(&entry)) {
+            (Some(text), _) => raw.events.push(egui::Event::Text(text.into())),
+            (None, Some(key)) => {
+                for pressed in [true, false] {
+                    raw.events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Default::default() });
+                }
+                if let (1, Some(letter)) = (entry.len(), entry.chars().next()) {
+                    raw.events.push(egui::Event::Text(letter.to_lowercase().to_string()));
+                }
+            }
+            _ => {}
+        }
+        // Tab moves between the card and the diff here, as in the terminal, so it never reaches egui's own walk through the widgets.
+        if self.open.is_some() {
+            let before = raw.events.len();
+            raw.events.retain(|event| !matches!(event, egui::Event::Key { key: Key::Tab, modifiers, .. } if !modifiers.shift));
+            self.tab |= raw.events.len() != before;
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let tones = tones(ui.visuals().dark_mode);
         let ctx = ui.ctx().clone();
         self.frames += 1;
-        if let (3, Ok(path)) = (self.frames, std::env::var("REVUI_GPU_SHOT")) {
+        if let (true, Ok(path)) = (self.frames == 12 + 8 * self.script.len() as u32, std::env::var("REVUI_GPU_SHOT")) {
             let quit = ctx.clone();
             ctx.request_screenshot(move |image| {
                 let file = std::fs::File::create(&path).expect("screenshot file");
@@ -281,7 +369,7 @@ impl eframe::App for App {
                 quit.send_viewport_cmd(egui::ViewportCommand::Close);
             });
         }
-        if self.frames < 6 {
+        if self.frames < 16 + 8 * self.script.len() as u32 {
             ctx.request_repaint();
         }
         let frame = egui::Frame::new().fill(tones.bg);
@@ -292,6 +380,18 @@ impl eframe::App for App {
                     ui.set_max_width(680.0);
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.label(RichText::new("revui").font(bold(24.0)).color(tones.strong));
+                        ui.add_space(14.0);
+                        ui.label(RichText::new("Merge request or pull request link").font(bold(13.0)).color(tones.strong));
+                        ui.horizontal(|ui| {
+                            let field = ui.add(egui::TextEdit::singleline(&mut self.link).desired_width(560.0).hint_text("https://gitlab.com/group/project/-/merge_requests/123"));
+                            let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+                            if (button(ui, &tones, "Open", true).clicked() || entered) && !self.link.trim().is_empty() {
+                                match revui(&["fetch", self.link.trim()], None) {
+                                    Ok(dir) => pick = Some(dir.trim().to_string()),
+                                    Err(problem) => self.problem = problem,
+                                }
+                            }
+                        });
                         ui.add_space(14.0);
                         ui.label(RichText::new("YOUR REVIEWS").font(mono(11.5)).color(tones.dim));
                         ui.add_space(4.0);
@@ -316,6 +416,7 @@ impl eframe::App for App {
                 });
             });
             if let Some(dir) = pick {
+                self.link.clear();
                 self.show(&dir);
             }
             return;
@@ -323,14 +424,34 @@ impl eframe::App for App {
 
         let typing = ctx.egui_wants_keyboard_input();
         let pressed = |key: Key| !typing && ctx.input(|input| input.key_pressed(key) && !input.modifiers.command && !input.modifiers.ctrl);
-        if pressed(Key::Q) {
+        if pressed(Key::Q) && self.open.as_ref().is_some_and(|open| open.contents.is_none() && open.publish.is_none()) {
             return self.list();
         }
         let open = self.open.as_mut().expect("a review is open");
+        let modal = open.contents.is_some() || open.publish.is_some();
+        let pressed = |key: Key| !modal && pressed(key);
         let step = (pressed(Key::L) || pressed(Key::ArrowRight)) as isize - (pressed(Key::H) || pressed(Key::ArrowLeft)) as isize;
-        open.at = (open.at as isize + step).clamp(0, open.cards.len() as isize - 1) as usize;
+        if step != 0 {
+            open.at = (open.at as isize + step).clamp(0, open.cards.len() as isize - 1) as usize;
+            (open.in_diff, open.line, open.proof) = (false, 0, 0);
+        }
         open.diff ^= pressed(Key::D);
-        open.contents ^= pressed(Key::B);
+        if pressed(Key::B) {
+            open.contents = Some(open.at);
+        }
+        if std::mem::take(&mut self.tab) && !modal && open.diff && open.group().is_some() {
+            (open.in_diff, open.moved) = (!open.in_diff, true);
+        }
+        let down = (pressed(Key::J) || pressed(Key::ArrowDown)) as isize - (pressed(Key::K) || pressed(Key::ArrowUp)) as isize;
+        if down != 0 && open.in_diff {
+            (open.line, open.moved) = ((open.line as isize + down).clamp(0, open.lines().len().saturating_sub(1) as isize) as usize, true);
+        } else if let (true, Card::Item(n)) = (down != 0, open.cards[open.at]) {
+            open.proof = (open.proof as isize + down).clamp(0, open.data.review.items[n].evidence.len().saturating_sub(1) as isize) as usize;
+        }
+        open.compose |= pressed(Key::C);
+        if pressed(Key::P) {
+            open.publish = Some((0, open.data.preview.clone()));
+        }
         let mut marked: Option<(String, &str)> = None;
         if let Card::Item(n) = open.cards[open.at] {
             let id = open.data.review.items[n].id.clone();
@@ -347,14 +468,20 @@ impl eframe::App for App {
                 ui.label(RichText::new(&open.data.review.title).size(16.0).color(tones.strong));
                 ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    button(ui, &tones, &format!("Publish {}", open.data.outgoing), true);
+                    if button(ui, &tones, &format!("Publish {}", open.data.outgoing), true).clicked() {
+                        open.publish = Some((0, open.data.preview.clone()));
+                    }
                     open.diff ^= button(ui, &tones, "Diff", open.diff).clicked();
-                    open.contents ^= button(ui, &tones, "Contents", false).clicked();
+                    if button(ui, &tones, "Contents", false).clicked() {
+                        open.contents = Some(open.at);
+                    }
                 });
             });
         });
         egui::Panel::bottom("keys").frame(frame.inner_margin(egui::Margin::symmetric(14, 5))).show_inside(ui, |ui| {
-            ui.label(RichText::new("l next · h back · a agree · x dismiss · d diff · b contents · q reviews").font(mono(11.5)).color(tones.dim));
+            let here = if open.in_diff { "j k line · c comment on the line · tab card" } else { "j k evidence · a agree · x dismiss · c comment · tab diff" };
+            let said = if open.note.is_empty() { String::new() } else { format!("   {}", open.note) };
+            ui.label(RichText::new(format!("l next · h back · {here} · d diff · b contents · p publish · q reviews{said}")).font(mono(11.5)).color(tones.dim));
         });
 
         if let (true, Some(group)) = (open.diff, open.group()) {
@@ -362,6 +489,7 @@ impl eframe::App for App {
                 egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     let mut last = usize::MAX;
+                    let mut row = 0;
                     for &(file, hunk) in &open.data.groups[group] {
                         let (shown, hunk) = (&open.data.files[file], &open.data.files[file].hunks[hunk]);
                         if file != last {
@@ -384,7 +512,9 @@ impl eframe::App for App {
                                 '-' => (REMOVED, Color32::from_white_alpha(170)),
                                 _ => (Color32::TRANSPARENT, Color32::from_white_alpha(140)),
                             };
-                            egui::Frame::new().fill(fill).show(ui, |ui| {
+                            let under = open.in_diff && sign != '\\' && row == open.line;
+                            row += (sign != '\\') as usize;
+                            let drawn = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, if under { Color32::WHITE } else { Color32::TRANSPARENT })).show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;
@@ -397,6 +527,9 @@ impl eframe::App for App {
                                     ui.label(RichText::new(line.get(1..).unwrap_or("")).font(mono(12.5)).color(ink));
                                 });
                             });
+                            if under && open.moved {
+                                drawn.response.scroll_to_me(None);
+                            }
                         }
                     }
                 });
@@ -405,7 +538,7 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().frame(frame.inner_margin(egui::Margin::symmetric(30, 26))).show_inside(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                ui.set_max_width(760.0);
+                ui.set_max_width(760.0_f32.min(ui.available_width()));
                 match open.cards[open.at] {
                     Card::Summary => {
                         let review = &open.data.review;
@@ -455,10 +588,10 @@ impl eframe::App for App {
                         ui.add_space(8.0);
                         if item.kind != "good" {
                             ui.horizontal(|ui| {
-                                if button(ui, &tones, "✓ Agree", verdict.as_deref() == Some("agree")).clicked() {
+                                if button(ui, &tones, "Agree", verdict.as_deref() == Some("agree")).clicked() {
                                     marked = Some((item.id.clone(), "agree"));
                                 }
-                                if button(ui, &tones, "✕ Dismiss", verdict.as_deref() == Some("dismiss")).clicked() {
+                                if button(ui, &tones, "Dismiss", verdict.as_deref() == Some("dismiss")).clicked() {
                                     marked = Some((item.id.clone(), "dismiss"));
                                 }
                             });
@@ -469,7 +602,8 @@ impl eframe::App for App {
                         ui.label(RichText::new(format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() })).font(bold(14.0)).color(tones.strong));
                         for (n, evidence) in item.evidence.iter().enumerate() {
                             ui.add_space(8.0);
-                            egui::Frame::new().fill(INK).inner_margin(14.0).show(ui, |ui| {
+                            let current = !open.in_diff && n == open.proof;
+                            egui::Frame::new().fill(INK).stroke(Stroke::new(if current { 2.0 } else { 0.0 }, tones.rust)).inner_margin(14.0).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(format!("evidence.{}", n + 1)).font(mono(11.5)).color(ON_INK.gamma_multiply(0.6)));
@@ -483,22 +617,68 @@ impl eframe::App for App {
                         }
                     }
                 }
+                ui.add_space(18.0);
+                let about = match (open.lines().get(open.line).filter(|_| open.in_diff), open.cards[open.at]) {
+                    (Some((file, line, _)), _) => format!("Comment on {file}:{line}"),
+                    (None, Card::Item(n)) => format!("Comment on {}", open.data.review.items[n].id),
+                    _ => "Comment on the whole merge request".into(),
+                };
+                ui.label(RichText::new(about).font(bold(14.0)).color(tones.strong));
+                let field = ui.add(egui::TextEdit::multiline(&mut open.draft).desired_width(f32::INFINITY).desired_rows(3));
+                if std::mem::take(&mut open.compose) {
+                    field.request_focus();
+                    field.scroll_to_me(None);
+                }
+                if button(ui, &tones, "Save comment", false).clicked() {
+                    if let Err(problem) = open.comment() {
+                        open.note = problem;
+                    }
+                }
             });
         });
+        open.moved = false;
 
-        if open.contents {
+        if let Some((mut choice, mut text)) = open.publish.take() {
+            let (mut keep, mut send) = (true, false);
+            egui::Window::new("Publish your review").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| {
+                ui.set_width(680.0);
+                ui.label(RichText::new("This is exactly what goes to the merge request. Nothing is posted until you confirm.").color(tones.text));
+                for (n, how) in open.data.finish.iter().enumerate() {
+                    ui.radio_value(&mut choice, n, how);
+                }
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| ui.add(egui::TextEdit::multiline(&mut text).font(mono(12.0)).desired_width(f32::INFINITY)));
+                ui.horizontal(|ui| {
+                    keep = !button(ui, &tones, "Cancel", false).clicked() && !ui.input(|input| input.key_pressed(Key::Escape));
+                    send = button(ui, &tones, "Publish", true).clicked();
+                });
+            });
+            if send {
+                open.note = match revui(&["publish", &open.dir, &(choice + 1).to_string()], Some(&text)) {
+                    Ok(_) => "Published.".into(),
+                    Err(problem) => problem,
+                };
+                let _ = open.refresh();
+            } else if keep {
+                open.publish = Some((choice, text));
+            }
+        }
+
+        if let Some(mut on) = open.contents {
             let mut go = None;
+            let (down, enter, leave) = ctx.input(|input| ((input.key_pressed(Key::J) || input.key_pressed(Key::ArrowDown)) as isize - (input.key_pressed(Key::K) || input.key_pressed(Key::ArrowUp)) as isize, input.key_pressed(Key::Enter), input.key_pressed(Key::Escape)));
+            on = (on as isize + down).clamp(0, open.cards.len() as isize - 1) as usize;
             egui::Window::new("Contents").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| {
                 ui.set_min_width(520.0);
                 for (n, card) in open.cards.iter().enumerate() {
                     let label = RichText::new(open.label(*card)).font(if matches!(card, Card::Item(_)) { mono(12.5) } else { bold(13.5) });
-                    if ui.selectable_label(n == open.at, label).clicked() {
+                    if ui.selectable_label(n == on, label).clicked() {
                         go = Some(n);
                     }
                 }
             });
-            if let Some(n) = go {
-                (open.at, open.contents) = (n, false);
+            open.contents = if leave { None } else { Some(on) };
+            if let Some(n) = go.or(enter.then_some(on)) {
+                (open.at, open.contents, open.in_diff, open.line, open.proof) = (n, None, false, 0, 0);
             }
         }
         if let Some((id, verdict)) = marked {

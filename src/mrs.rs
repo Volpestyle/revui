@@ -15,6 +15,7 @@ use std::{fs, io};
 struct Config {
     generate: Option<String>,
     generate_modal: Option<bool>,
+    guide: Option<String>,
     prepare: Option<String>,
     claude: Option<String>,
     drive: Option<String>,
@@ -417,8 +418,11 @@ fn from_github(pr: &serde_json::Value, repo: &str) -> Option<Mr> {
     })
 }
 
+/// What the agent that writes a guide is told: to follow the guide revui ships, then whatever the config adds as
+/// `guide`, which is how a team's own way of reviewing rides on it without replacing it.
 pub fn guide_prompt(url: &str, dir: &str) -> String {
-    format!("Review {url} and write its revui guide into {dir}. Run `revui skill guide` first and follow it.")
+    let own = config().guide.filter(|more| !more.trim().is_empty()).map_or(String::new(), |more| format!(" Then, on top of it: {}", more.trim()));
+    format!("Review {url} and write its revui guide into {dir}. Run `revui skill guide` first and follow it.{own}")
 }
 
 /// Open merge requests and pull requests that ask for your review and are not drafts, as links, and each host that

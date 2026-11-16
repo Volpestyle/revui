@@ -8,7 +8,8 @@ with none, pasting a link reviews it with Claude Code in a tab.
 | --- | --- | --- |
 | `claude` | The command that starts Claude Code, available to every command as `$REVUI_CLAUDE`. | `claude` |
 | `agents` | The coding agent that reviews, and that `t`, `v` and `i` ask. | Claude Code in a tab |
-| `generate`, `generate_modal` | A command of your own that writes guides, in place of the review's agent, and whether it runs in a tab. | not set |
+| `guide` | What to add to the guide revui ships, in your words: a review skill of your team's to follow for the findings, what to look hardest at. | not set |
+| `generate`, `generate_modal` | A command of your own that writes guides, in place of the review's agent and the guide revui ships, and whether it runs in a tab. | not set |
 | `prepare` | A command that writes a guide with no one watching, for `revui prepare`. | not set |
 | `open`, `open_more`, `open_modal` | What `o` runs to open a file. | the line on the web |
 | `drive` | How agents should drive a browser or app on this machine. | they pick a background tool |
@@ -115,8 +116,15 @@ The guide is written in stages. The summary and the parts land first, then each
 finding as it is found, and the open review picks each one up without moving you
 from the card you are on. The top line says what the agent is on until it is done.
 
-To write guides with something else (a team's own review skill, a CI job), set
-`generate` to a command. It gets the merge request in `$REVUI_URL` and the bundle
+The guide the agent follows ships with revui (`revui skill guide`), so every
+review gets what it asks for, such as the map of where the change sits. To add
+your own way of reviewing to it, set `guide` to what the agent should also do:
+
+    "guide": "For the findings, follow our /team-review skill. Look hardest at migrations."
+
+To replace it, and write guides with something else entirely (a CI job, a
+command of your own), set `generate` to a command. What revui's guide gains later
+then has to be added to yours by hand. The command gets the merge request in `$REVUI_URL` and the bundle
 in `$REVUI_DIR`, and runs in the background unless you add `"generate_modal": true`:
 
     "generate": "tmux new-window \"claude '/revui-guide $REVUI_URL'\""

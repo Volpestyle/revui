@@ -1,3 +1,4 @@
+mod web;
 mod bundle;
 mod draw;
 mod input;
@@ -1816,12 +1817,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         (Some("hunks"), Some(dir)) => return Ok(print!("{}", Bundle::load(Path::new(dir))?.hunks())),
         (Some("web"), Some(_)) => {
-            let server = Path::new(env!("CARGO_MANIFEST_DIR")).join("web/server/main.ts");
-            if !server.exists() {
-                return Err(format!("revui web runs from a checkout of revui, and {} is gone. Build revui from the checkout you keep: cargo install --path .", server.display()).into());
-            }
-            let ran = std::process::Command::new("node").arg(server).args(&args[1..]).env("REVUI_BIN", std::env::current_exe()?).status();
-            std::process::exit(ran.map_err(|e| format!("node: {e}"))?.code().unwrap_or(1));
+            let named = args[1..].iter().find(|arg| !arg.starts_with("--")).ok_or("usage: revui web <dir | mr url>")?;
+            return web::serve(named);
         }
         (Some("json"), Some(dir)) => return Ok(println!("{}", shared::json(&Bundle::load(Path::new(dir))?))),
         (Some("state"), Some(dir)) => {
@@ -1952,7 +1949,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui queue             list the merge requests waiting for your review, and make their bundles\n\
                  revui prepare [mr url]  write the guides those are missing, or that one's, with no one watching\n\
                  revui hunks <dir>       list the diff's files and hunk indexes\n\
-                 revui web <dir | mr url> [--no-agent]   the same review in a browser, with the agent as a chat unless --no-agent (needs node, and a checkout of revui)\n\
+                 revui web <dir | mr url>   the same review in a browser, drawn on the GPU (needs the interface built in a checkout: cd gpu && trunk build --release)\n\
                  revui json <dir>        print the review, its diff, your marks and what would go out, for another front end\n\
                  revui state <dir>       save your marks, read as JSON from stdin\n\
                  revui threads <dir>     ask the host what is already said on the merge request\n\

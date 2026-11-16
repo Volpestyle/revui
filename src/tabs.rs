@@ -238,7 +238,7 @@ impl Tabs {
             let note = format!(" copied {count} characters ");
             let width = note.chars().count() as u16;
             let corner = Rect::new(screen.right().saturating_sub(width), screen.y, width.min(screen.width), 1);
-            frame.render_widget(Span::styled(note, Style::new().fg(Color::Black).bg(Color::Yellow)), corner);
+            frame.render_widget(Span::styled(note, Style::new().fg(Color::Black).bg(crate::draw::YELLOW)), corner);
         }
     }
 }

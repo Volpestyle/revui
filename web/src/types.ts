@@ -61,6 +61,7 @@ type Data = {
   threads: Thread[]
   product: boolean
   agent: boolean
+  system: { text: string; touched: Record<string, number> } | null
 }
 
 export type { Data, Evidence, Hunk, Item, Note, State, Thread }

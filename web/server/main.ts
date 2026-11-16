@@ -33,7 +33,7 @@ if (!named) {
 const dir = resolve(/^https?:\/\//.test(named) ? (await revui(["fetch", named])).trim() : named)
 const port = Number(process.env.PORT ?? 4319)
 const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
-const root = fileURLToPath(new URL("..", import.meta.url))
+const root = resolve(process.env.REVUI_WEB ?? fileURLToPath(new URL("..", import.meta.url)))
 const production = process.env.NODE_ENV !== "development" && existsSync(join(root, "dist/index.html"))
 
 const review = async () => ({ ...JSON.parse(await revui(["json", dir])), agent })
@@ -140,7 +140,7 @@ const server = createServer(async (request, response) => {
     if (path.startsWith("/api/")) return await api(request, response, path)
     if (path.startsWith("/bundle/")) return file(response, path.slice("/bundle/".length), dir) || json(response, { problem: "not found" }, 404)
     if (vite) return vite.middlewares(request, response)
-    if (!file(response, path.slice(1), join(root, "dist"))) file(response, "index.html", join(root, "dist"))
+    if (!file(response, path.slice(1), join(root, "dist")) && !file(response, "index.html", join(root, "dist"))) json(response, { problem: "not found" }, 404)
   } catch (error) {
     json(response, { problem: error instanceof Error ? error.message : String(error) }, 500)
   }

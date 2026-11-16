@@ -73,8 +73,13 @@ more findings may come. Remove it when the guide is whole.
 `map` is one evidence entry (see "Evidence") shown with the summary: a diagram of the
 components the change touches and their neighbours, with what the change adds, alters
 and removes marked. It is where the reader gets their bearings before the parts.
-`revui map <dir>` prints the system map kept for the repo, which it is cut from. Leave
-it out for a change that stays inside one component.
+`revui map <dir>` prints the system map kept for the repo, which it is cut from. That map
+names the folders each component owns in `%% id: folder/, folder/` lines, and `revui json`
+gives it with the count of changed files per component as `system`, so a viewer can show
+where a change lands with no guide at all. Leave
+it out only when it cannot be drawn: a change that stays inside one component still gets
+that component and its neighbours. Without it, the page shows the folders the change
+touches, counted from the diff.
 
 Required: `title`, `sources`, `sections` (each with `title`, `why`, `hunks`), and
 for each item `id`, `kind`, `title`, `body`. Everything else can be left out.

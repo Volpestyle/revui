@@ -174,6 +174,12 @@ pub fn drive_report(bundle: Option<&Path>) -> String {
 }
 
 /// Where the system map of a bundle's repo is kept, and what it holds. One per repo, shared by every review of it.
+/// The system map kept for a repo, when one has been drawn: the flowchart every review of that repo starts from.
+pub fn system_map(repo: &str) -> Option<String> {
+    let kept = data_dir().join("notes").join(format!("{}.map.mmd", repo.replace('/', "__")));
+    fs::read_to_string(kept).ok().filter(|text| !text.trim().is_empty())
+}
+
 pub fn map_report(bundle: &Path) -> Result<String, String> {
     let repo = Bundle::load(bundle)?.review.sources.first().map(|source| source.repo.clone()).filter(|repo| !repo.is_empty());
     let repo = repo.ok_or("this bundle names no repository")?;
@@ -918,6 +924,19 @@ fn history(root: &Path) -> Vec<Past> {
     kept
 }
 
+/// Every review here as JSON, the latest first, for another front end's start screen. `cwd` is where its agent last ran.
+pub fn list() -> String {
+    let row = |past: &Past| {
+        let session = fs::read_to_string(past.dir.join("session.json")).ok().and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+        let cwd = session.and_then(|session| session["cwd"].as_str().map(String::from)).unwrap_or_default();
+        serde_json::json!({
+            "dir": past.dir, "url": past.url, "repo": past.repo, "reference": past.reference, "title": past.title, "author": past.author,
+            "items": past.items, "marked": past.marked, "drafts": past.drafts, "done": past.done, "working": past.working, "when": since(past.touched), "cwd": cwd,
+        })
+    };
+    serde_json::Value::Array(history(&data_dir()).iter().map(row).collect()).to_string()
+}
+
 fn since(then: std::time::SystemTime) -> String {
     match then.elapsed().map_or(0, |passed| passed.as_secs()) {
         seconds if seconds < 90 => "just now".to_string(),
@@ -1019,7 +1038,7 @@ impl Home {
             _ => format!("j/k move · tab type a link or filter · w waiting for you · r rescan · , settings{tabs} · / commands · ? help · q quit"),
         };
         let wanted: Vec<(&str, &str, KeyCode, Color)> = match (self.typing, shown.get(sel)) {
-            (false, Some(_)) => vec![("enter", "Open", KeyCode::Enter, Color::Green)],
+            (false, Some(_)) => vec![("enter", "Open", KeyCode::Enter, crate::draw::GREEN)],
             _ => Vec::new(),
         };
         self.actions = crate::footer(frame, foot, &wanted, &keys, "");
@@ -1037,7 +1056,7 @@ impl Home {
         ));
         match (&self.busy, self.message.is_empty()) {
             (Some(busy), _) => title.extend([Span::raw("  "), crate::spinner(), Span::raw(format!(" {busy}…"))]),
-            (None, false) => title.push(Span::styled(format!("  {}", self.message), Style::new().fg(Color::Yellow))),
+            (None, false) => title.push(Span::styled(format!("  {}", self.message), Style::new().fg(crate::draw::YELLOW))),
             _ => {}
         }
         frame.render_widget(Line::from(title), head);
@@ -1062,9 +1081,9 @@ impl Home {
                         spinner.content = format!(" {} reviewing ", spinner.content).into();
                         spinner
                     }
-                    (_, true, _, _) => Span::styled(" unfinished  ", Style::new().fg(Color::Yellow)),
-                    (_, _, Some(_), _) => Span::styled(" ✓ done      ", Style::new().fg(Color::Green)),
-                    (_, _, _, true) => Span::styled(" guide       ", Style::new().fg(Color::Green)),
+                    (_, true, _, _) => Span::styled(" unfinished  ", Style::new().fg(crate::draw::YELLOW)),
+                    (_, _, Some(_), _) => Span::styled(" ✓ done      ", Style::new().fg(crate::draw::GREEN)),
+                    (_, _, _, true) => Span::styled(" guide       ", Style::new().fg(crate::draw::GREEN)),
                     _ if past.requested => Span::styled(" waiting     ", Style::new().fg(crate::accent())),
                     _ => Span::styled(" diff        ", dim),
                 };

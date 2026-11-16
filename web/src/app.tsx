@@ -212,9 +212,9 @@ function App() {
     <Tabs className="app" orientation="vertical" value={card.key} onValueChange={(key) => key && go(key)}>
       <header className="bar">
         <svg className="brand" viewBox="0 0 111 111" role="img" aria-label="revui">
-          <path d="M11 3.25H74.65L107.75 36.35V100" fill="none" stroke="#5B6EE1" strokeWidth="6.5" />
-          <path d="M0 11H65L100 46V111H0Z" fill="#08090C" />
-          <path d="M24 64L42 82L76 48" fill="none" stroke="#F3F4F8" strokeWidth="11" />
+          <path d="M11 3.25H74.65L107.75 36.35V100" fill="none" style={{ stroke: "var(--logo-back)" }} strokeWidth="6.5" />
+          <path d="M0 11H65L100 46V111H0Z" style={{ fill: "var(--logo-body)" }} />
+          <path d="M24 64L42 82L76 48" fill="none" style={{ stroke: "var(--logo-check)" }} strokeWidth="11" />
         </svg>
         <span className="title">{data.review.title}</span>
         {source?.reference && <a className="readout" href={source.url} target="_blank" rel="noreferrer">{source.repo}{source.reference}</a>}
@@ -252,7 +252,15 @@ function App() {
         {outline && <ResizableHandle aria-label="Resize the list of cards" />}
         <ResizablePanel id="card" defaultSize={diffed ? 32 : 60} minSize={20}>
           <TabsPanel value={card.key} className="card">
-            <CardView data={data} card={card} picked={picked} comment={comment} go={go} save={save} />
+            <CardView
+              data={data}
+              card={card}
+              picked={picked}
+              comment={comment}
+              go={go}
+              save={save}
+              draw={data.agent ? () => (openChat(true), void send("Draw this repo's system map: follow \"The map\" in `revui skill guide`, steps 1 and 2, with a `%% id: folder/` line for every component, and save it where `revui map` says. Then draw this review's own map from it.", "ask")) : undefined}
+            />
           </TabsPanel>
         </ResizablePanel>
         {diffed && <ResizableHandle aria-label="Resize the diff" />}

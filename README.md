@@ -61,15 +61,15 @@ Two things it will not do:
 
 https://github.com/user-attachments/assets/f48dc385-cb79-45f0-bec4-d86ab66d5ae3
 
-The same review as a page, with the same keys. The Mac app puts it in a window with the list of your reviews, and carries everything it needs. `revui web <link>` serves the page in your browser instead. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
+The same review in a window, with the same keys, drawn on the GPU by one Rust interface. The Mac app shows the list of your reviews and carries the `revui` it needs. `revui web <link>` serves the same interface to your browser, compiled to WebAssembly. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
 
-Both are built from a checkout of this repo for now: the released binary cannot run `revui web`, which also needs Node, and the app is not in the releases yet.
+Both are built from a checkout of this repo for now: neither is in the releases yet.
 
-    cd app && pnpm install && pnpm build                                # the Mac app
-    cargo install --path . && (cd web && pnpm install && pnpm build)    # once, for revui web
-    revui web <link>                                                    # --no-agent inside Herdr, Orca or Cursor
+    cd gpu && ./bundle.sh                    # the Mac app: gpu/target/revui.app and a disk image
+    cd gpu && trunk build --release          # once, for revui web (cargo install trunk)
+    cargo install --path . && revui web <link>
 
-[web/README.md](web/README.md) has the details.
+[gpu/README.md](gpu/README.md) has the details.
 
 ## With an agent
 

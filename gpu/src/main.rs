@@ -31,6 +31,7 @@ struct Item {
     severity: String,
     title: String,
     body: String,
+    plain: String,
     section: Option<usize>,
     at: Option<At>,
     evidence: Vec<Evidence>,
@@ -56,6 +57,7 @@ struct Section {
 struct Review {
     title: String,
     summary: String,
+    plain: String,
     sections: Vec<Section>,
     items: Vec<Item>,
     map: Option<Evidence>,
@@ -90,6 +92,8 @@ struct Data {
     system: Option<System>,
     claude: String,
     threads: Vec<Thread>,
+    product: bool,
+    quoted: std::collections::BTreeMap<String, bool>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -214,7 +218,7 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        Ok(Self { dir: dir.into(), data, cards, at, diff: true, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, stamp: host::stamp(dir), looked: 0.0 })
+        Ok(Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, stamp: host::stamp(dir), looked: 0.0 })
     }
 
     /// Picks up what the agent, or the terminal viewer, wrote to the bundle since it was last read.
@@ -797,12 +801,16 @@ impl eframe::App for App {
                             let stats = [(review.sections.len().to_string(), "parts"), (review.items.iter().filter(|item| item.kind == "finding").count().to_string(), "findings"), (review.items.iter().filter(|item| item.kind == "decision").count().to_string(), "decisions"), (open.data.files.len().to_string(), "files"), (format!("+{} −{}", lines('+'), lines('-')), "lines")];
                             ui.columns(stats.len(), |columns| {
                                 for (column, (value, name)) in columns.iter_mut().zip(&stats) {
-                                    column.label(RichText::new(value).font(serif(26.0)).color(Color32::WHITE));
+                                    column.add(egui::Label::new(RichText::new(value).font(serif(26.0)).color(Color32::WHITE)).extend());
                                     column.label(RichText::new(*name).size(12.5).color(ON_INK.gamma_multiply(0.6)));
                                 }
                             });
                         });
                         ui.add_space(18.0);
+                        if open.data.product && !review.plain.trim().is_empty() {
+                            prose(ui, &tones, &review.plain);
+                            ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
+                        }
                         prose(ui, &tones, &review.summary);
                         ui.separator();
                         ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
@@ -918,9 +926,24 @@ impl eframe::App for App {
                                 if button(ui, &tones, &icon(Icon::X, "Dismiss"), verdict.as_deref() == Some("dismiss")).clicked() {
                                     marked = Some((item.id.clone(), "dismiss"));
                                 }
+                                if verdict.is_some() {
+                                    let quoted = open.data.quoted.get(&item.id).copied().unwrap_or(false);
+                                    ui.label(RichText::new(if quoted { "goes out quoted" } else { "only your comment goes out" }).size(12.0).color(tones.dim));
+                                    if button(ui, &tones, &icon(Icon::Quote, "Quote it"), quoted).clicked() {
+                                        let mut state = open.data.state.clone();
+                                        state["quotes"][&item.id] = (!quoted).into();
+                                        if let Err(problem) = open.save(state) {
+                                            open.note = problem;
+                                        }
+                                    }
+                                }
                             });
                         }
                         ui.add_space(10.0);
+                        if open.data.product && !item.plain.trim().is_empty() {
+                            prose(ui, &tones, &item.plain);
+                            ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
+                        }
                         prose(ui, &tones, &item.body);
                         ui.separator();
                         ui.label(RichText::new(format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() })).font(bold(14.0)).color(tones.strong));

@@ -16,6 +16,7 @@ struct Config {
     generate: Option<String>,
     generate_modal: Option<bool>,
     guide: Option<String>,
+    terminal: Option<String>,
     prepare: Option<String>,
     claude: Option<String>,
     drive: Option<String>,
@@ -311,6 +312,27 @@ pub fn drive() -> String {
 
 pub fn claude() -> String {
     config().claude.filter(|name| !name.trim().is_empty()).unwrap_or_else(|| "claude".into())
+}
+
+/// Runs `script` in a terminal of the person's, for a front end that has none: the script and what it reads from
+/// its environment are written to a file, and the config's `terminal` command is handed it as `$REVUI_SCRIPT`.
+/// Without one, the machine's own terminal app opens it.
+pub fn in_terminal(script: &str, env: &[(String, String)], folder: Option<&str>) -> Result<(), String> {
+    let quoted = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let exports: String = env.iter().map(|(name, value)| format!("export {name}={}\n", quoted(value))).collect();
+    let go = folder.map_or(String::new(), |folder| format!("cd {} || exit\n", quoted(folder)));
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let path = std::env::temp_dir().join(format!("revui-{stamp}.command"));
+    fs::write(&path, format!("#!/bin/sh\n{exports}{go}exec sh -c {}\n", quoted(script))).map_err(|e| format!("{}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o700));
+    }
+    let default = if cfg!(target_os = "macos") { "open \"$REVUI_SCRIPT\"" } else { "x-terminal-emulator -e \"$REVUI_SCRIPT\"" };
+    let terminal = config().terminal.filter(|command| !command.trim().is_empty()).unwrap_or_else(|| default.into());
+    let ran = Command::new("sh").args(["-c", &terminal]).env("REVUI_SCRIPT", &path).output().map_err(|e| format!("{terminal}: {e}"))?;
+    if ran.status.success() { Ok(()) } else { Err(format!("Could not open a terminal ({}): {terminal}", String::from_utf8_lossy(&ran.stderr).trim())) }
 }
 
 pub fn open_command() -> String {

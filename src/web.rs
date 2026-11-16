@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tiny_http::{Header, Method, Request, Response, Server};
 
-const RUNS: [&str; 9] = ["json", "list", "state", "publish", "prompt", "fetch", "threads", "agent", "tree"];
+const RUNS: [&str; 10] = ["json", "list", "state", "publish", "prompt", "fetch", "threads", "agent", "tree", "open"];
 
 fn kind(path: &Path) -> &'static str {
     match path.extension().and_then(|kind| kind.to_str()).unwrap_or("") {

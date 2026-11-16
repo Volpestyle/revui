@@ -457,6 +457,7 @@ struct App {
     dressed: Option<bool>,
     captured: std::sync::Arc<std::sync::atomic::AtomicU32>,
     tab: bool,
+    row: usize,
 }
 
 impl App {
@@ -476,7 +477,7 @@ impl App {
         cc.egui_ctx.set_fonts(fonts);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
         let named = host::named();
-        let mut app = Self { reviews: Vec::new(), open: None, problem: String::new(), link: String::new(), play: play::Play::load(), dressed: None, captured: Default::default(), tab: false };
+        let mut app = Self { reviews: Vec::new(), open: None, problem: String::new(), link: String::new(), play: play::Play::load(), dressed: None, captured: Default::default(), tab: false, row: 0 };
         match named {
             Some(dir) => app.show(&dir),
             None => app.list(),
@@ -629,7 +630,7 @@ fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
         });
     });
     ui.add_space(6.0);
-    egui::ScrollArea::vertical().auto_shrink(false).max_height((ui.available_height() - 136.0).max(80.0)).stick_to_bottom(true).show(ui, |ui| {
+    egui::ScrollArea::vertical().auto_shrink(false).max_height((ui.available_height() - 124.0).max(80.0)).stick_to_bottom(true).show(ui, |ui| {
         if open.chat.log.is_empty() {
             ui.label(RichText::new("This review's agent. It wrote the guide, so it already knows the change. Ask it about the card you are on.\n\nCmd-J opens and closes it, Cmd-Shift-M minimizes it to the bottom bar, Cmd-Shift-D pulls it out or docks it.").size(13.0).color(tones.dim));
         }
@@ -648,7 +649,8 @@ fn agent(ui: &mut egui::Ui, open: &mut Open, tones: &Tones) {
     });
     ui.add_space(8.0);
     let about = open.on().map_or("Ask about this review".to_string(), |on| format!("Ask about {on}"));
-    let field = ui.add(egui::TextEdit::multiline(&mut open.chat.draft).desired_width(f32::INFINITY).desired_rows(3).hint_text(about));
+    let field = ui.add(egui::TextEdit::multiline(&mut open.chat.draft).desired_width(f32::INFINITY).desired_rows(3).margin(egui::Margin::symmetric(10, 9)).hint_text(about));
+    ui.add_space(6.0);
     if std::mem::take(&mut open.ask) {
         field.request_focus();
     } else if open.leave {
@@ -741,6 +743,18 @@ impl eframe::App for App {
         let frame = egui::Frame::new().fill(tones.bg);
         if self.open.is_none() {
             let mut pick = None;
+            let typing = ctx.egui_wants_keyboard_input();
+            let key = |key: Key| !typing && ctx.input(|input| input.key_pressed(key) && !input.modifiers.command && !input.modifiers.ctrl);
+            let (last, before) = (self.reviews.len().saturating_sub(1), self.row);
+            if key(Key::G) {
+                self.row = if ctx.input(|input| input.modifiers.shift) { last } else { 0 };
+            }
+            let down = (key(Key::J) || key(Key::ArrowDown)) as isize - (key(Key::K) || key(Key::ArrowUp)) as isize;
+            self.row = (self.row as isize + down).clamp(0, last as isize) as usize;
+            let (moved, insert) = (self.row != before, key(Key::I));
+            if key(Key::Enter) || key(Key::L) {
+                pick = self.reviews.get(self.row).map(|past| past.dir.clone());
+            }
             egui::CentralPanel::default().frame(frame.inner_margin(32.0)).show_inside(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.set_max_width(680.0);
@@ -752,8 +766,11 @@ impl eframe::App for App {
                         ui.add_space(14.0);
                         ui.label(RichText::new("Merge request or pull request link").font(bold(13.0)).color(tones.strong));
                         ui.horizontal(|ui| {
-                            let field = ui.add(egui::TextEdit::singleline(&mut self.link).desired_width(560.0).hint_text("https://gitlab.com/group/project/-/merge_requests/123"));
+                            let field = ui.add(egui::TextEdit::singleline(&mut self.link).desired_width(560.0).margin(egui::Margin::symmetric(10, 8)).hint_text("https://gitlab.com/group/project/-/merge_requests/123"));
                             let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+                            if insert {
+                                field.request_focus();
+                            }
                             if (button(ui, &tones, "Open", true).clicked() || entered) && !self.link.trim().is_empty() {
                                 match revui(&["fetch", self.link.trim()], None) {
                                     Ok(dir) => pick = Some(dir.trim().to_string()),
@@ -762,21 +779,25 @@ impl eframe::App for App {
                             }
                         });
                         ui.add_space(14.0);
-                        ui.label(RichText::new("YOUR REVIEWS").font(mono(11.5)).color(tones.dim));
+                        ui.label(RichText::new("YOUR REVIEWS     j k move · enter open · g G ends · i paste a link · esc back to the list").font(mono(11.5)).color(tones.dim));
                         ui.add_space(4.0);
                         if !self.problem.is_empty() {
                             ui.label(RichText::new(&self.problem).color(tones.rust));
                         }
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            for past in &self.reviews {
+                            for (n, past) in self.reviews.iter().enumerate() {
+                                let (fill, ink, faint) = if n == self.row { (tones.accent, tones.on_accent, tones.on_accent.gamma_multiply(0.7)) } else { (tones.raised, tones.strong, tones.dim) };
                                 let state = if !past.working.trim().is_empty() { past.working.clone() } else if past.done.is_some() { "published".into() } else if past.items > 0 { format!("{} of {} marked", past.marked, past.items) } else { "no guide yet".into() };
                                 let about = [format!("{}{}", past.repo.rsplit('/').next().unwrap_or(""), past.reference), past.author.clone(), state, past.when.clone()].join(" · ");
-                                let row = egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.line)).inner_margin(10.0).show(ui, |ui| {
+                                let row = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, tones.line)).inner_margin(10.0).show(ui, |ui| {
                                     ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(if past.title.is_empty() { &past.dir } else { &past.title }).size(14.5).color(tones.strong));
-                                    ui.label(RichText::new(about).size(12.0).color(tones.dim));
+                                    ui.label(RichText::new(if past.title.is_empty() { &past.dir } else { &past.title }).size(14.5).color(ink));
+                                    ui.label(RichText::new(about).size(12.0).color(faint));
                                 });
-                                if fx::touch(ui, row.response.interact(egui::Sense::click()), tones.strong).clicked() {
+                                if n == self.row && moved {
+                                    row.response.scroll_to_me(None);
+                                }
+                                if fx::touch(ui, row.response.interact(egui::Sense::click()), ink).clicked() {
                                     pick = Some(past.dir.clone());
                                 }
                             }
@@ -886,6 +907,8 @@ impl eframe::App for App {
         let mut marked: Option<(String, &str)> = None;
         let mut home = false;
         let (mut mapping, mut rooting, mut rootless) = (false, false, false);
+        let mut turn = 0;
+        let mut opening: Option<String> = None;
         if let Card::Item(n) = open.cards[open.at] {
             let id = open.data.review.items[n].id.clone();
             match (pressed(Key::A), pressed(Key::X)) {
@@ -900,7 +923,6 @@ impl eframe::App for App {
                 ui.set_min_height(34.0);
                 home = logo(ui, 20.0).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Your reviews (q)").clicked();
                 ui.label(RichText::new(&open.data.review.title).font(serif(16.0)).color(tones.strong));
-                ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let count = if open.data.outgoing > 0 { open.data.outgoing.to_string() } else { String::new() };
                     if button(ui, &tones, &icon(Icon::Send, &count), true).on_hover_text("Publish (p)").clicked() {
@@ -913,6 +935,10 @@ impl eframe::App for App {
                     if button(ui, &tones, &icon(Icon::List, ""), false).on_hover_text("Contents (b)").clicked() {
                         open.contents = Some(open.at);
                     }
+                    ui.add_space(10.0);
+                    turn += button(ui, &tones, &icon(Icon::ChevronRight, ""), false).on_hover_text("Next (l)").clicked() as isize;
+                    ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
+                    turn -= button(ui, &tones, &icon(Icon::ChevronLeft, ""), false).on_hover_text("Back (h)").clicked() as isize;
                 });
             });
             if open.chat.busy {
@@ -920,6 +946,10 @@ impl eframe::App for App {
                 fx::shimmer(ui, egui::Rect::from_min_max(egui::pos2(edge.left(), edge.bottom() - 2.0), edge.max), tones.accent);
             }
         });
+        if turn != 0 {
+            open.at = (open.at as isize + turn).clamp(0, open.cards.len() as isize - 1) as usize;
+            (open.in_diff, open.line, open.proof, open.range) = (false, 0, 0, None);
+        }
         egui::Panel::bottom("keys").frame(frame.inner_margin(egui::Margin::symmetric(14, 5))).show_inside(ui, |ui| {
             let here = if open.in_diff { "j k line · V select lines · c comment on them · tab next panel" } else { "j k scroll · e evidence · enter open it · a agree · x dismiss · c comment · tab next panel" };
             let said = if open.note.is_empty() { String::new() } else { format!("   {}", open.note) };
@@ -1108,7 +1138,7 @@ impl eframe::App for App {
                                             for (file, parts) in open.data.files.iter().zip(&paths) {
                                                 *places.entry(parts[shared]).or_default() += file.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(['+', '-'])).count();
                                             }
-                                            nodes = places.iter().map(|(name, lines)| map::Node { id: name.to_string(), label: name.to_string(), form: map::Form::Block, state: Some("changed"), tall: 10.0 + 9.0 * (1.0 + *lines as f32).ln(), note: format!("{lines} lines changed") }).collect();
+                                            nodes = places.iter().map(|(name, lines)| map::Node { id: name.to_string(), label: name.to_string(), form: map::Form::Block, state: Some("changed"), tall: 10.0 + 9.0 * (1.0 + *lines as f32).ln(), note: format!("{lines} lines changed"), opens: paths.iter().zip(&changed).find(|(parts, _)| parts[shared] == *name).map(|(_, path)| path.to_string()) }).collect();
                                             nodes.sort_by_key(|node| std::cmp::Reverse(places[node.id.as_str()]));
                                             nodes.truncate(36);
                                             caption = format!("Only where this change lands{}, each as tall as its lines changed.", if shared == 0 { String::new() } else { format!(" in {}", paths[0][..shared].join("/")) });
@@ -1116,6 +1146,12 @@ impl eframe::App for App {
                                             text = if rootless { "To see the rest of the repo around it, tell revui where your code is kept.".into() } else { format!("The rest of the repo is not shown: {}.", why.trim().trim_start_matches("Error: ").trim_matches('"')) };
                                         }
                                     }
+                                }
+                            }
+                            if let (true, Some(system)) = (sight != "Folders", &open.data.system) {
+                                let owns: Vec<(&str, &str)> = system.text.lines().filter_map(|line| line.trim().strip_prefix("%%")?.split_once(':')).flat_map(|(id, folders)| folders.split(',').map(move |folder| (id.trim(), folder.trim()))).filter(|(_, folder)| !folder.is_empty()).collect();
+                                for node in &mut nodes {
+                                    node.opens = changed.iter().find(|path| owns.iter().any(|(id, folder)| *id == node.id && path.starts_with(folder))).map(|path| path.to_string());
                                 }
                             }
                             let labels = named.unwrap_or(nodes.len() <= 14);
@@ -1138,7 +1174,7 @@ impl eframe::App for App {
                                 });
                                 let look = map::Look { raised: tones.raised, top: tones.line.gamma_multiply(0.8), side: tones.line, edge: tones.dim, text: tones.strong };
                                 match (nodes.is_empty(), review.map.as_ref().and_then(|map| map.path.as_ref())) {
-                                    (false, _) => map::draw(ui, &look, &nodes, &edges, map::Show { calls, labels }),
+                                    (false, _) => opening = map::draw(ui, &look, &nodes, &edges, map::Show { calls, labels }),
                                     (true, Some(path)) => artifact(ui, &open.dir, path),
                                     _ => {}
                                 }
@@ -1275,7 +1311,8 @@ impl eframe::App for App {
                         _ => "Comment on the whole merge request".into(),
                     };
                     ui.label(RichText::new(about).font(bold(14.0)).color(tones.strong));
-                    let field = ui.add(egui::TextEdit::multiline(&mut open.draft).desired_width(f32::INFINITY).desired_rows(3));
+                    let field = ui.add(egui::TextEdit::multiline(&mut open.draft).desired_width(f32::INFINITY).desired_rows(3).margin(egui::Margin::symmetric(10, 9)));
+                    ui.add_space(6.0);
                     if std::mem::take(&mut open.compose) {
                         field.request_focus();
                         field.scroll_to_me(None);
@@ -1387,6 +1424,13 @@ impl eframe::App for App {
         if rooting && open.root().is_some() {
             ctx.data_mut(|data| data.remove_by_type::<Result<std::sync::Arc<std::collections::BTreeMap<String, usize>>, String>>());
         }
+        if let Some(file) = opening {
+            // ponytail: the window waits while revui fetches the file for an editor that asks for it; move it to a thread if that shows.
+            let line = open.data.files.iter().find(|known| known.path == file).and_then(|known| known.hunks.first()).map_or(1, |hunk| hunk.new_start.max(1));
+            if let Err(problem) = revui(&["open", &open.dir, &file, &line.to_string()], None) {
+                open.note = problem;
+            }
+        }
         if mapping {
             open.agent = true;
             open.tell(&ctx, "ask", "Draw the map for this review, as `revui skill guide` says under \"The map\": the system map of the repo first if `revui map` shows none, then this review's `assets/map.mmd` and `map` in review.json.");
@@ -1412,6 +1456,7 @@ fn settle() {
     let path = asked.ok().and_then(|out| String::from_utf8_lossy(&out.stdout).lines().last().map(str::to_string)).filter(|path| path.contains('/'));
     // SAFETY: nothing else runs yet, so no other thread reads the environment while it changes.
     unsafe {
+        std::env::set_var("REVUI_SOCKET", std::env::temp_dir().join(format!("revui-app-{}.sock", std::process::id())));
         if let (Some(bin), Err(_)) = (beside, std::env::var("REVUI_BIN")) {
             std::env::set_var("REVUI_BIN", bin);
         }

@@ -12,6 +12,7 @@ with none, pasting a link reviews it with Claude Code in a tab.
 | `generate`, `generate_modal` | A command of your own that writes guides, in place of the review's agent and the guide revui ships, and whether it runs in a tab. | not set |
 | `prepare` | A command that writes a guide with no one watching, for `revui prepare`. | not set |
 | `open`, `open_more`, `open_modal` | What `o` runs to open a file. | the line on the web |
+| `terminal` | For the window interface, which has no terminal of its own: the command that runs `$REVUI_SCRIPT` in a terminal of yours, when your editor or the agent needs one. | the machine's terminal app |
 | `drive` | How agents should drive a browser or app on this machine. | they pick a background tool |
 | `accent` | The highlight colour: a name or a hex value such as `"#d77757"`. | `#9a9ef2` |
 | `tickets` | Where a ticket id in a review opens, in the window interface: a URL with `{}` where the id goes, such as `"https://linear.app/acme/issue/{}"`. | not set: ticket ids are plain text |
@@ -281,6 +282,13 @@ request's head. `$REVUI_HEAD_FILE` is the file as it is at the head and
 `$REVUI_BASE_FILE` the same file before the merge request: revui fetches them
 into the bundle, read-only, the first time a command asks. Open both in your
 editor's diff mode to see the change in context.
+
+In the window interface a click on a block of the map opens its changed file with the
+same command. An editor that needs a terminal (`open_modal`) is started in one of
+yours: by default the machine's terminal app, or whatever `terminal` runs, such as a
+new tab of the app you work in:
+
+    "terminal": "herdr-browser do tab.new --name revui --argv \"$(jq -cn --arg s \"$REVUI_SCRIPT\" '[\"sh\",$s]')\""
 
 With `"open_modal": true` the command runs in a terminal drawn over the review
 instead of taking the screen. `ctrl-q` hides it and `enter` shows it again. To

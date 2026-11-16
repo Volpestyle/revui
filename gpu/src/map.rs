@@ -19,6 +19,8 @@ pub struct Node {
     pub tall: f32,
     /// What hovering it adds to its name.
     pub note: String,
+    /// The changed file a click on it opens.
+    pub opens: Option<String>,
 }
 
 pub struct Edge {
@@ -57,7 +59,7 @@ pub fn parse(text: &str) -> (Vec<Node>, Vec<Edge>) {
                 }
                 known.state = marked.or(known.state);
             }
-            None => nodes.push(Node { label: label.unwrap_or_else(|| id.clone()), id: id.clone(), form, state: marked, tall: 0.0, note: String::new() }),
+            None => nodes.push(Node { label: label.unwrap_or_else(|| id.clone()), id: id.clone(), form, state: marked, tall: 0.0, note: String::new(), opens: None }),
         }
         Some(id)
     };
@@ -157,6 +159,7 @@ pub fn folders(tree: &BTreeMap<String, usize>, changed: &[&str]) -> (Vec<Node>, 
     tree.iter().for_each(|(folder, files)| *holds.entry(name(folder, folder == ".")).or_default() += files);
     let mut touched: BTreeMap<String, usize> = BTreeMap::new();
     changed.iter().for_each(|path| *touched.entry(name(path, true)).or_default() += 1);
+    let first = |folder: &String| changed.iter().find(|path| name(path, true) == *folder).map(|path| path.to_string());
     for folder in touched.keys() {
         holds.entry(folder.clone()).or_insert(1);
     }
@@ -167,15 +170,16 @@ pub fn folders(tree: &BTreeMap<String, usize>, changed: &[&str]) -> (Vec<Node>, 
     kept.sort();
     let block = |folder: &String| {
         let here = touched.get(folder).map_or(String::new(), |files| format!(", {files} changed here"));
-        Node { id: folder.clone(), label: if folder == "." { "top level".into() } else { folder.clone() }, form: Form::Block, state: touched.contains_key(folder).then_some("changed"), tall: 10.0 + 9.0 * (1.0 + holds[folder] as f32).ln(), note: format!("{} files{here}", holds[folder]) }
+        Node { id: folder.clone(), label: if folder == "." { "top level".into() } else { folder.clone() }, form: Form::Block, state: touched.contains_key(folder).then_some("changed"), tall: 10.0 + 9.0 * (1.0 + holds[folder] as f32).ln(), note: format!("{} files{here}", holds[folder]), opens: first(folder) }
     };
     (kept.into_iter().map(block).collect(), more)
 }
 
 /// The map as blocks you can turn: drag turns and tilts it, shift-drag moves it, a pinch brings it closer and a
-/// double click puts it back. What is new, changed or removed is lit. Columns go by how far a component sits from
+/// double click beside the blocks puts it back. What is new, changed or removed is lit. Returns the file of a
+/// block that was clicked, for the caller to open. Columns go by how far a component sits from
 /// the entry points, so calls read left to right; with no calls to go by, the blocks stand in a square.
-pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show: Show) {
+pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show: Show) -> Option<String> {
     let mut depth: BTreeMap<&str, usize> = nodes.iter().map(|node| (node.id.as_str(), 0)).collect();
     for _ in 0..nodes.len() {
         for edge in edges.iter().filter(|edge| edge.from != edge.to) {
@@ -219,12 +223,6 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show
     if hit.hovered() {
         camera.zoom = (camera.zoom * ui.input(|input| input.zoom_delta())).clamp(0.4, 4.0);
     }
-    if hit.double_clicked() {
-        camera = HOME;
-    }
-    ui.data_mut(|data| data.insert_temp(id, camera));
-    let held = if hit.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab };
-    let hit = hit.on_hover_cursor(held);
 
     let painter = ui.painter_at(rect);
     let scale = fit * camera.zoom;
@@ -240,6 +238,11 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show
         let near = |node: &&Node| (place(at[node.id.as_str()], rise(node) / 2.0) - pointer).length();
         nodes.iter().min_by(|a, b| near(a).total_cmp(&near(b))).filter(|node| near(node) < 50.0 * scale)
     });
+    let kept = if hit.double_clicked() && over.is_none() { HOME } else { camera };
+    ui.data_mut(|data| data.insert_temp(id, kept));
+    let opened = over.filter(|_| hit.clicked()).and_then(|node| node.opens.clone());
+    let held = if hit.dragged() { egui::CursorIcon::Grabbing } else if over.is_some_and(|node| node.opens.is_some()) { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Grab };
+    let hit = hit.on_hover_cursor(held);
     let (sin, cos) = camera.turn.sin_cos();
     let squash = camera.tilt.sin();
     let mut order: Vec<&Node> = nodes.iter().collect();
@@ -300,8 +303,10 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show
         painter.text(rect.right_bottom() - vec2(2.0, 0.0), Align2::RIGHT_BOTTOM, "drag to turn · shift-drag to move · pinch to zoom · double-click to reset", FontId::monospace(10.5), look.edge);
     }
     if let Some(node) = over {
-        hit.on_hover_text_at_pointer(if node.note.is_empty() { node.label.clone() } else { format!("{} · {}", node.label, node.note) });
+        let does = node.opens.as_ref().map_or(String::new(), |file| format!("\nClick to open {file}"));
+        hit.on_hover_text_at_pointer(if node.note.is_empty() { format!("{}{does}", node.label) } else { format!("{} · {}{does}", node.label, node.note) });
     }
+    opened
 }
 
 #[cfg(test)]
@@ -328,5 +333,6 @@ mod tests {
         assert_eq!((found("src/ui").state, found("src/ui").note.as_str()), (Some("changed"), "40 files, 2 changed here"));
         assert!(found(".").state.is_some() && found("tools/new").state.is_some() && found("src").state.is_none() && found("docs/guide").state.is_none());
         assert!(found("src/ui").tall > found("src").tall);
+        assert_eq!((found("src/ui").opens.as_deref(), found("src").opens.as_deref()), (Some("src/ui/button.tsx"), None));
     }
 }

@@ -766,7 +766,11 @@ impl App {
     }
 
     fn command(&self, script: &str, mode: Mode, fresh: bool) -> std::process::Command {
-        let place = self.open_target().map(|(file, line)| (&self.bundle.files[file], line));
+        self.command_at(script, mode, fresh, self.open_target().map(|(file, line)| (&self.bundle.files[file], line)))
+    }
+
+    /// The command with everything it may name in its environment, about `place`: a file of the diff and a line in it.
+    fn command_at(&self, script: &str, mode: Mode, fresh: bool, place: Option<(&bundle::FileDiff, u32)>) -> std::process::Command {
         let sources = &self.bundle.review.sources;
         let source = place.and_then(|(file, _)| sources.iter().find(|s| s.id == file.source)).or(sources.first());
         let (file, line) = place.map_or(("", 0), |(file, line)| (file.path.as_str(), line));
@@ -824,7 +828,7 @@ impl App {
             .env("REVUI_SESSION_ID", session_id)
             .env("REVUI_HEAD_FILE", head_file)
             .env("REVUI_BASE_FILE", base_file)
-            .env("REVUI_SOCKET", std::env::temp_dir().join(format!("revui-{}.sock", std::process::id())))
+            .env("REVUI_SOCKET", std::env::var_os("REVUI_SOCKET").map_or_else(|| std::env::temp_dir().join(format!("revui-{}.sock", std::process::id())), PathBuf::from))
             .env("REVUI_PROMPT_URI", url_encode(&prompt))
             .env("REVUI_PROMPT", prompt);
         command
@@ -1070,6 +1074,33 @@ fn file_at(dir: &Path, github: bool, repo: &str, sha: &str, file: &str, folder: 
         let _ = std::fs::set_permissions(&path, permissions);
     }
     Some(path)
+}
+
+/// `revui open <dir> <file> [line]`: the config's open command on a file of the review, for a front end with no
+/// terminal of its own. An editor that needs one (`open_modal`) is started in a terminal of the person's, by the
+/// config's `terminal` command; one already open on `$REVUI_SOCKET` is handed the file by `open_more`.
+fn open_outside(dir: &Path, file: &str, line: u32) -> Result<(), String> {
+    use std::io::IsTerminal;
+    let app = App::new(Bundle::load(dir)?, Picker::halfblocks());
+    let at = app.bundle.files.iter().find(|known| known.path == file).ok_or_else(|| format!("{file} is not in this review's diff"))?;
+    let (script, modal, more) = mrs::open_settings();
+    let quiet = std::process::Stdio::null;
+    let running = std::env::var_os("REVUI_SOCKET").is_some_and(|socket| Path::new(&socket).exists());
+    if let (true, true, Some(more)) = (modal, running, &more) {
+        if app.command_at(more, Mode::Ask, true, Some((at, line))).stdin(quiet()).output().is_ok_and(|ran| ran.status.success()) {
+            return Ok(());
+        }
+    }
+    let mut command = app.command_at(&script, Mode::Ask, true, Some((at, line)));
+    let failed = |e: std::io::Error| format!("Could not run the open command ({e}): {script}");
+    if !modal {
+        return command.stdin(quiet()).stdout(quiet()).stderr(quiet()).spawn().map(drop).map_err(failed);
+    }
+    if std::io::stdin().is_terminal() {
+        return command.status().map(drop).map_err(failed);
+    }
+    let named = |(name, value): (&std::ffi::OsStr, Option<&std::ffi::OsStr>)| Some((name.to_str()?.to_string(), value?.to_str()?.to_string()));
+    mrs::in_terminal(&script, &command.get_envs().filter_map(named).collect::<Vec<_>>(), None)
 }
 
 fn open_file(terminal: &mut DefaultTerminal, app: &mut App, wait_for_editor: bool) -> std::io::Result<()> {
@@ -1930,6 +1961,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some("map"), Some(dir)) => return Ok(print!("{}", mrs::map_report(Path::new(dir))?)),
         (Some("checkout"), Some(dir)) => return Ok(println!("{}", mrs::checkout(Path::new(dir), args.get(2).map(String::as_str))?)),
         (Some("tree"), Some(dir)) => return Ok(println!("{}", mrs::tree(Path::new(dir))?)),
+        (Some("open"), Some(dir)) if args.len() > 2 => return Ok(open_outside(Path::new(dir), &args[2], args.get(3).and_then(|line| line.parse().ok()).unwrap_or(1))?),
         (Some("doctor"), _) => {
             use std::io::IsTerminal;
             let images = match std::io::stdin().is_terminal() {
@@ -1970,6 +2002,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui map <dir>         the system map kept for that bundle's repo, and where it is\n\
                  revui checkout <dir> [root]   the folder that review's agent starts in: its repo, found under the folder your code is kept in (given once)\n\
                  revui tree <dir>        the folders of that review's repo and how many files each holds, as JSON, read from that checkout\n\
+                 revui open <dir> <file> [line]   open a file of the review with the config's open command, in a terminal of yours if it needs one\n\
                  revui doctor            check the setup, exit 1 when something needs fixing\n\
                  revui setup             have a coding agent set revui up for you\n\
                  revui setup --guide     print the setup guide that agent follows\n\

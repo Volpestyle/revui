@@ -11,7 +11,7 @@
   color-scheme: light;
   --bg: #ffffff; --pane: #fafafa; --line: #e8e8ea; --text: #18181b; --soft: #55555c; --faint: #8e8e96;
   --accent: #18181b; --code: #f2f2f3; --key: #efeff1;
-  --blocker: #c4281c; --fix: #b8560a; --suggestion: #6f6f78; --question: #6f6f78; --decision: #6f6f78; --good: #6f6f78;
+  --blocker: #c4281c; --fix: #b8560a; --suggestion: #8a6d0b; --question: #1f5fbf; --decision: #7a4fc4; --good: #1f8a4c;
   --k: #8250df; --s: #0a6e3d; --n: #b45309; --c: #8e8e96; --f: #1f5fbf; --t: #0b7285; --p: #3b3b44; --g: #116329;
   --add: #eef8f1; --del: #fcf0f0; --hunk: #f6f6f7; --mark: #ececef; --plus: #1f8a4c; --minus: #c4281c;
 }
@@ -19,7 +19,7 @@
   color-scheme: dark;
   --bg: #0b0b0d; --pane: #101012; --line: #1f1f23; --text: #ededf0; --soft: #a0a0a8; --faint: #66666e;
   --accent: #ededf0; --code: #17171a; --key: #1b1b1f;
-  --blocker: #ff7369; --fix: #f0a35e; --suggestion: #9a9aa3; --question: #9a9aa3; --decision: #9a9aa3; --good: #9a9aa3;
+  --blocker: #ff7369; --fix: #f0a35e; --suggestion: #d9b95a; --question: #8ab4f8; --decision: #c4a7f5; --good: #5fc48a;
   --k: #c4a7f5; --s: #8fd6a5; --n: #f0b072; --c: #6c6c76; --f: #8ab4f8; --t: #7fd1d9; --p: #c9c9d1; --g: #8fd6a5;
   --add: #0f1d15; --del: #211214; --hunk: #131316; --mark: #25252b; --plus: #5fc48a; --minus: #ff7369;
 }
@@ -28,7 +28,7 @@
     color-scheme: dark;
     --bg: #0b0b0d; --pane: #101012; --line: #1f1f23; --text: #ededf0; --soft: #a0a0a8; --faint: #66666e;
     --accent: #ededf0; --code: #17171a; --key: #1b1b1f;
-    --blocker: #ff7369; --fix: #f0a35e; --suggestion: #9a9aa3; --question: #9a9aa3; --decision: #9a9aa3; --good: #9a9aa3;
+    --blocker: #ff7369; --fix: #f0a35e; --suggestion: #d9b95a; --question: #8ab4f8; --decision: #c4a7f5; --good: #5fc48a;
     --k: #c4a7f5; --s: #8fd6a5; --n: #f0b072; --c: #6c6c76; --f: #8ab4f8; --t: #7fd1d9; --p: #c9c9d1; --g: #8fd6a5;
   --add: #0f1d15; --del: #211214; --hunk: #131316; --mark: #25252b; --plus: #5fc48a; --minus: #ff7369;
   }
@@ -71,7 +71,7 @@ button { font: inherit; color: inherit; }
 .dots { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
 .dots a { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
 .dots a.on { background: var(--text); }
-.dots a.blocker:not(.on), .dots a.fix:not(.on) { background: var(--c); }
+.dots a[class]:not(.on):not(.finding) { background: var(--c); }
 .work { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .work.side { display: grid; grid-template-columns: minmax(240px, var(--split, 50%)) 5px minmax(240px, 1fr); }
 .split { flex: 0 0 5px; background: transparent; cursor: row-resize; position: relative; z-index: 1; }
@@ -186,7 +186,7 @@ body.pinned .frame { display: flex; flex: 1; min-height: 0; }
 .rail .over.loose { padding: 8px 10px 2px; margin-top: 12px; }
 .rail a.sub { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 0 6px; padding: 5px 10px 5px 12px; margin-left: 10px; border-left: 1px solid var(--line); color: var(--soft); font-size: 13px; }
 .rail .id { font: 500 11.5px/1.65 "Geist Mono", ui-monospace, monospace; color: var(--faint); }
-.rail a.blocker .id, .rail a.fix .id { color: var(--c); }
+.rail a.sub .id { color: var(--c); }
 .rail a:hover { color: var(--text); }
 .rail a.on { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
 .rail a.sub.on { border-left-color: var(--text); }
@@ -200,7 +200,7 @@ body.narrow .frame > .rail a.part { margin-top: 8px; }
 body.narrow .frame > .rail .id, body.narrow .frame > .rail .name, body.narrow .frame > .rail .over { display: none; }
 body.narrow .frame > .rail .short { display: block; }
 body.narrow .frame > .rail a.sub .short { color: var(--faint); }
-body.narrow .frame > .rail a.sub.blocker .short, body.narrow .frame > .rail a.sub.fix .short { color: var(--c); }
+body.narrow .frame > .rail a.sub .short { color: var(--c); }
 body.narrow .frame > .rail a.on .short { color: var(--text); }
 .slab { background: var(--pane); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 28px 32px; margin-bottom: 28px; }
 .slab { position: relative; overflow: hidden; }
@@ -276,38 +276,39 @@ const metric = (data.metric ?? '')
 
 const escape = (text) =>
     String(text ?? '').replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char]);
+
 const inline = (text) =>
     escape(text)
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-const slug = (text) =>
-    String(text)
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
 
 // The guide's text uses a small part of Markdown: "# " headings, "- " and "1. " lists, backticks, bold.
 const prose = (text) => {
     const out = [];
     let list = null;
+
     const close = () => {
         if (list) out.push(`</${list}>`);
         list = null;
     };
+
     for (const line of String(text ?? '').split('\n')) {
         const heading = line.match(/^#+\s+(.*)/);
         const bullet = line.match(/^\s*[-*]\s+(.*)/);
         const numbered = line.match(/^\s*\d+[.)]\s+(.*)/);
+
         if (heading) {
             close();
             out.push(`<h4>${inline(heading[1])}</h4>`);
         } else if (bullet || numbered) {
             const kind = bullet ? 'ul' : 'ol';
+
             if (list !== kind) {
                 close();
                 out.push(`<${kind}>`);
                 list = kind;
             }
+
             out.push(`<li>${inline((bullet ?? numbered)[1])}</li>`);
         } else if (line.trim()) {
             close();
@@ -316,7 +317,9 @@ const prose = (text) => {
             close();
         }
     }
+
     close();
+
     return out.join('\n');
 };
 
@@ -330,6 +333,7 @@ const kinds = {
     webp: 'image/webp',
     svg: 'image/svg+xml',
 };
+
 const figure = (path, caption) => {
     if (!path || !data.files[path]) return '';
     const extension = path.split('.').pop().toLowerCase();
@@ -351,6 +355,7 @@ const figure = (path, caption) => {
 // Each file's hunks, with every line's number in the new file so an item's line can be found and marked.
 // Where a file at the merge request's head opens on the code host.
 const blob = source.url && source.head_sha ? `${source.url.split('/-/')[0]}/-/blob/${source.head_sha}/` : '';
+
 const onHost = (file, line, text, kind) =>
     blob
         ? `<a class="${kind}" href="${escape(blob + file)}${line ? `#L${escape(line)}` : ''}" target="_blank" rel="noopener" title="Open on the code host">${text}</a>`
@@ -360,6 +365,7 @@ const patch = (() => {
     const files = {};
     let hunks = null;
     let line = 0;
+
     for (const text of data.patch.split('\n')) {
         if (text.startsWith('diff --git ')) hunks = null;
         else if (text.startsWith('+++ ') && !hunks?.length) {
@@ -370,11 +376,14 @@ const patch = (() => {
         } else if (hunks?.length && !text.startsWith('\\')) {
             const kind = text.startsWith('+') ? 'add' : text.startsWith('-') ? 'del' : '';
             hunks.at(-1).push({ text, kind, line: kind === 'del' ? null : line });
+
             if (kind !== 'del') line++;
         }
     }
+
     return files;
 })();
+
 const changed = Object.values(patch).flat(2);
 const added = changed.filter((line) => line.kind === 'add').length;
 const removed = changed.filter((line) => line.kind === 'del').length;
@@ -382,6 +391,7 @@ const removed = changed.filter((line) => line.kind === 'del').length;
 // Syntax colours for the diff, a line at a time: a diff shows pieces of a file, so a comment or template string
 // that runs over several lines is only coloured on the lines that open or close it.
 const words = (text) => new Set(text.split(' '));
+
 const languages = {
     js: {
         comment: '\\/\\/.*|\\/\\*.*?(?:\\*\\/|$)',
@@ -422,6 +432,7 @@ const languages = {
     },
     css: { comment: '\\/\\*.*?(?:\\*\\/|$)', keywords: words('important media supports import from to and not only') },
 };
+
 const byExtension = {
     ts: 'js',
     tsx: 'js',
@@ -449,26 +460,35 @@ const byExtension = {
     css: 'css',
     scss: 'css',
 };
+
 const literals = words('true false null undefined None True False nil NaN Infinity');
+
 const language = (file) => {
     const name = file.split('/').pop();
+
     if (name === 'Makefile' || name === 'Dockerfile' || name.startsWith('.env')) return languages.sh;
+
     return languages[byExtension[name.split('.').pop().toLowerCase()]];
 };
+
 const paint = (code, lang) => {
     if (!lang) return escape(code);
+
     const token = new RegExp(
         `(?<comment>${lang.comment})|(?<string>"(?:[^"\\\\]|\\\\.)*"?|'(?:[^'\\\\]|\\\\.)*'?|\`(?:[^\`\\\\]|\\\\.)*\`?)|(?<number>\\b(?:0x[\\da-fA-F]+|\\d[\\d_]*(?:\\.\\d+)?)\\b)|(?<tag><\\/?[A-Za-z][\\w.-]*|\\/?>)|(?<word>[A-Za-z_$@][\\w$-]*)`,
         'g',
     );
+
     let out = '';
     let last = 0;
+
     for (const match of code.matchAll(token)) {
         const [text] = match;
         const { comment, string, number, tag, word } = match.groups;
         const after = code.slice(match.index + text.length);
         const before = code.slice(0, match.index);
         let kind = '';
+
         if (comment) kind = 'c';
         else if (string) kind = 's';
         else if (number) kind = 'n';
@@ -476,6 +496,7 @@ const paint = (code, lang) => {
             kind = lang === languages.js && /^<\/?[A-Za-z]|^\/?>$/.test(text) && !/[\w)\]]\s*$/.test(before) ? 'g' : '';
         else if (word) {
             const bare = lang === languages.sql ? text.toLowerCase() : text;
+
             if (/\.\s*$/.test(before) && !/^\s*\(/.test(after)) kind = 'p';
             else if (lang.keywords.has(bare)) kind = 'k';
             else if (literals.has(text)) kind = 'n';
@@ -485,11 +506,13 @@ const paint = (code, lang) => {
             else if (/^[A-Z]/.test(text)) kind = 't';
             else if (text.startsWith('@')) kind = 'k';
         }
+
         out +=
             escape(code.slice(last, match.index)) +
             (kind ? `<span class="${kind}">${escape(text)}</span>` : escape(text));
         last = match.index + text.length;
     }
+
     return out + escape(code.slice(last));
 };
 
@@ -498,8 +521,10 @@ const diff = (cited) =>
         .map(({ file, hunk }) => {
             const hunks = patch[file] ?? [];
             const shown = hunk === undefined || hunk === null ? hunks : [hunks[hunk]].filter(Boolean);
+
             if (!shown.length) return '';
             const lang = language(file);
+
             const lines = shown
                 .flat()
                 .map(
@@ -507,6 +532,7 @@ const diff = (cited) =>
                         `<span class="line ${line.kind}"${line.line ? ` data-n="${escape(file)}:${line.line}"` : ''}><i>${line.line ?? ''}</i>${line.kind === 'at' ? escape(line.text) : `<b>${escape(line.text.slice(0, 1)) || ' '}</b>${paint(line.text.slice(1), lang)}`}</span>`,
                 )
                 .join('');
+
             return `<div class="file"><div class="path">${onHost(file, '', escape(file), 'open')}</div><pre class="diff">${lines}</pre></div>`;
         })
         .join('');
@@ -529,14 +555,17 @@ ${media ? `<div class="aside">${media}</div>` : ''}
 const itemStep = (item) => {
     const evidence = item.evidence ?? [];
     const media = evidence.filter((one) => one.path).map((one) => figure(one.path, one.caption));
+
     // Every entry is listed with how it was established and what it shows; one with text opens to show it, and a
     // picture or recording is the figure with the card.
     const traces = evidence.map((one) => {
         const line = `<span class="proof">${escape(proof[one.provenance] ?? one.provenance ?? '')}</span>${inline(one.caption ?? (one.path ? 'Figure' : 'Trace'))}`;
+
         return one.text
             ? `<details><summary>${line}</summary><div class="trace">${prose(one.text)}</div></details>`
             : `<p class="shown">${line}</p>`;
     });
+
     return step({
         id: item.id,
         name: `${label(item)} ${item.id}`,
@@ -553,6 +582,7 @@ ${evidence.length ? `<h4>Evidence (${evidence.length})</h4>${traces.join('')}` :
 };
 
 const count = (kind) => items.filter((item) => label(item) === kind || item.kind === kind).length;
+
 const tally = [
     [sections.length, 'parts'],
     [count('finding'), 'findings'],
@@ -560,39 +590,47 @@ const tally = [
     [count('good'), 'good calls'],
     [Object.keys(patch).length, 'files'],
 ];
+
 // What the sandbox run did, when the bundle carries its record (verify.json): each
 // step it took, whether it passed and how long it ran, then each check made against the running app.
 const verify = data.verify ?? null;
 const verified = verify && (verify.steps ?? []).every((one) => one.ok);
+
 // A step or check opens to show its proof when there is one: the end of the step's log (<step>.log beside
 // verify.json) or the check's own detail, such as the response it got.
 const tail = (name) => (verify.steps ?? []).find((one) => one.step === name)?.log ?? '';
 const runRow = (ok, name, note, proof) => {
     const line = `<span class="mark">${ok ? '✓' : '✕'}</span><span class="what">${name}</span><span class="note">${note}</span>`;
+
     return proof
         ? `<details class="row ${ok ? 'pass' : 'fail'}"${ok ? '' : ' open'}><summary>${line}</summary><pre class="log">${escape(proof)}</pre></details>`
         : `<div class="row ${ok ? 'pass' : 'fail'}">${line}</div>`;
 };
+
 const verifyStep = verify
     ? step({
           id: 'verification',
           name: 'verification',
-          text: `<div class="kind"><b>Verification</b> · ${verified ? 'confirmed by a run' : 'the run did not finish clean'}</div>
+          text: `<div class="kind"><b>Verification</b> · ${verified ? 'smoke test passed' : 'the run did not finish clean'}</div>
 <h2>Sandbox verification</h2>
 <p class="plain">The change was started in a throwaway copy of the stack inside the pipeline job, and these are the steps and checks that ran against it.</p>
+<p class="plain">${escape(verify.scope ?? 'This is a fixed smoke test, the same for every merge request: it shows the branch still starts and answers. It does not exercise what this change altered.')}</p>
 <h4>Steps</h4>
 <div class="run">${(verify.steps ?? []).map((one) => runRow(one.ok, escape(one.step), `${escape(one.seconds)} s`, tail(one.step) || 'This step printed nothing.')).join('')}</div>
 <h4>Checks</h4>
 <div class="run">${(verify.checks ?? [])
               .map((one) => {
                   const ok = one.ok ?? String(one.status) === '200';
+
                   return runRow(ok, inline(one.name), escape(one.status ?? ''), one.detail ?? '');
               })
               .join('')}</div>
+${verify.untested?.length ? `<h4>Not exercised</h4><ul>${verify.untested.map((one) => `<li>${inline(one)}</li>`).join('')}</ul>` : ''}
 ${verify.api ? `<p class="muted">API under test: <code>${escape(verify.api)}</code></p>` : ''}`,
           media: (verify.media ?? []).map((one) => figure(one.path, one.caption)).join(''),
       })
     : '';
+
 const steps = [
     step({
         id: 'summary',
@@ -632,8 +670,13 @@ ${
     ]),
     ...loose.map(itemStep),
 ];
-const kindsCount = items.reduce((all, item) => ({ ...all, [label(item)]: (all[label(item)] ?? 0) + 1 }), {});
+
+const kindsCount = Object.fromEntries(
+    Object.entries(Object.groupBy(items, label)).map(([kind, group]) => [kind, group.length]),
+);
+
 const row = (name, value) => `<dt>${escape(name)}</dt><dd>${value}</dd>`;
+
 const stats = `<h4>This review</h4>
 <dl>
 ${row('Merge request', `${escape(source.repo ?? '')} ${escape(source.reference ?? '')}`)}
@@ -644,8 +687,7 @@ ${verify ? row('Sandbox', `${(verify.steps ?? []).filter((one) => one.ok).length
 ${row(
     'Items',
     ['blocker', 'fix', 'suggestion', 'question', 'decision', 'good']
-        .filter((kind) => kindsCount[kind])
-        .map((kind) => `${kindsCount[kind]} ${kind}`)
+        .flatMap((kind) => (kindsCount[kind] ? [`${kindsCount[kind]} ${kind}`] : []))
         .join(' · ') || 'none',
 )}
 </dl>
@@ -666,6 +708,7 @@ ${row('Total', `${metric.reduce((sum, pass) => sum + pass.seconds, 0)} s · $${m
 // ids in one column and their titles in the next.
 const railItem = (item) =>
     `<a href="#${escape(item.id)}" class="sub ${escape(label(item))}" title="${escape(label(item))} ${escape(item.id)}"><span class="id">${escape(item.id)}</span><span class="name">${inline(item.title)}</span><span class="short">${escape(item.id)}</span></a>`;
+
 const rail = [
     `<a href="#summary" class="part"><span class="name">Summary</span><span class="short">≡</span></a>`,
     verify

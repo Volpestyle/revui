@@ -159,6 +159,8 @@ as `verify.json`, and the viewers show it as a card after the summary:
     {
       "steps":  [{ "step": "seed", "ok": true, "seconds": 38 }],
       "checks": [{ "name": "GET /agents as the seeded admin", "status": "200", "detail": "HTTP/1.1 200 OK" }],
+      "scope": "What this run does and does not show, in a sentence or two",
+      "untested": ["The suspend dialog itself: nothing clicks through the admin"],
       "api": "http://localhost:4566/...",
       "media": [{ "path": "assets/run.png", "caption": "The agents list after seeding" }]
     }

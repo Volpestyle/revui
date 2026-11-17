@@ -18,6 +18,34 @@ struct Evidence {
     text: Option<String>,
 }
 
+/// A step a sandbox run took, or a check it made against the running change, with what proves it.
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+struct Ran {
+    step: String,
+    name: String,
+    ok: Option<bool>,
+    seconds: f64,
+    status: serde_json::Value,
+    log: String,
+    detail: String,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+struct Verify {
+    steps: Vec<Ran>,
+    checks: Vec<Ran>,
+    api: String,
+    media: Vec<Evidence>,
+}
+
+impl Verify {
+    fn clean(&self) -> bool {
+        self.steps.iter().all(|step| step.ok == Some(true))
+    }
+}
+
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
 struct System {
@@ -131,6 +159,7 @@ struct Data {
     preview: String,
     finish: Vec<String>,
     system: Option<System>,
+    verify: Option<Verify>,
     claude: String,
     threads: Vec<Thread>,
     product: bool,
@@ -171,6 +200,7 @@ struct Past {
 #[derive(Clone, Copy, PartialEq)]
 enum Card {
     Summary,
+    Verify,
     Part(usize),
     Item(usize),
     Note(usize),
@@ -238,6 +268,8 @@ struct Open {
     diff: bool,
     contents: Option<usize>,
     in_diff: bool,
+    /// The contents column has the keys: j and k move between cards.
+    rail: bool,
     line: usize,
     moved: bool,
     proof: usize,
@@ -263,6 +295,7 @@ impl Open {
     fn load(dir: &str) -> Result<Self, String> {
         let data: Data = serde_json::from_str(&revui(&["json", dir], None)?).map_err(|e| format!("review: {e}"))?;
         let mut cards = vec![Card::Summary];
+        cards.extend(data.verify.is_some().then_some(Card::Verify));
         for part in 0..data.review.sections.len() {
             cards.push(Card::Part(part));
             cards.extend(data.review.items.iter().enumerate().filter(|(_, item)| item.section == Some(part)).map(|(n, _)| Card::Item(n)));
@@ -274,7 +307,7 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        let mut open = Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, range: None, floating: false, minimized: false, asking: false, leave: false, stamp: host::stamp(dir), looked: 0.0 };
+        let mut open = Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, rail: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, range: None, floating: false, minimized: false, asking: false, leave: false, stamp: host::stamp(dir), looked: 0.0 };
         open.chat.sync(dir);
         Ok(open)
     }
@@ -294,7 +327,7 @@ impl Open {
 
     fn group(&self) -> Option<usize> {
         match self.cards[self.at] {
-            Card::Summary => None,
+            Card::Summary | Card::Verify => None,
             Card::Part(part) => Some(part),
             Card::Item(n) => self.data.review.items[n].section,
             Card::Note(n) => {
@@ -311,6 +344,7 @@ impl Open {
     fn label(&self, card: Card) -> String {
         match card {
             Card::Summary => "Summary".into(),
+            Card::Verify => "Sandbox verification".into(),
             Card::Part(part) => format!("{}. {}", part + 1, self.data.review.sections[part].title),
             Card::Item(n) => format!("{} {}", self.data.review.items[n].id, self.data.review.items[n].title),
             Card::Note(n) => self.about(n),
@@ -586,6 +620,41 @@ fn chip(ui: &mut egui::Ui, tones: &Tones, item: &Item) -> egui::Response {
 fn bare(ui: &mut egui::Ui, tones: &Tones, icon: Icon, hint: &str, enabled: bool, on: bool) -> bool {
     let made = ui.add_enabled(enabled, egui::Button::new(RichText::new(icon.unicode().to_string()).size(17.0).color(if on { tones.strong } else { tones.dim })).frame(false).min_size(egui::vec2(28.0, 28.0)));
     fx::touch(ui, made, tones.strong).on_hover_text(hint).clicked()
+}
+
+/// The colours of a line added and a line removed, which are also those of a step that passed and one that failed.
+fn signs(tones: &Tones) -> (Color32, Color32) {
+    if tones.bg == INK { (Color32::from_rgb(95, 196, 138), Color32::from_rgb(255, 115, 105)) } else { (Color32::from_rgb(31, 138, 76), Color32::from_rgb(196, 40, 28)) }
+}
+
+/// One line of a sandbox run: whether it passed, what it was and how long it took or what came back. A press
+/// opens what proves it, the end of a log or a response; one that failed starts open.
+fn ran(ui: &mut egui::Ui, tones: &Tones, ok: bool, name: &str, note: &str, proof: &str) {
+    let fold = ui.id().with(("ran", name));
+    let mut opened = ui.data(|data| data.get_temp::<bool>(fold)).unwrap_or(!ok);
+    let (passed, failed) = signs(tones);
+    let row = ui.horizontal(|ui| {
+        ui.set_min_height(34.0);
+        ui.add_sized([22.0, 20.0], egui::Label::new(RichText::new(if ok { Icon::Check } else { Icon::X }.unicode().to_string()).size(15.0).color(if ok { passed } else { failed })).selectable(false));
+        ui.add(egui::Label::new(RichText::new(name).size(14.5).color(if ok { tones.text } else { failed })).selectable(false));
+        if !proof.is_empty() {
+            ui.add(egui::Label::new(RichText::new(if opened { "hide" } else { "log" }).font(mono(11.0)).color(tones.faint)).selectable(false));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.add(egui::Label::new(RichText::new(note).font(mono(12.5)).color(tones.faint)).selectable(false)));
+    });
+    let hit = ui.interact(row.response.rect, fold, egui::Sense::click());
+    if !proof.is_empty() && fx::touch(ui, hit, tones.strong).clicked() {
+        opened = !opened;
+        ui.data_mut(|data| data.insert_temp(fold, opened));
+    }
+    if opened && !proof.is_empty() {
+        egui::Frame::new().fill(tones.pane).stroke(Stroke::new(1.0, tones.line)).corner_radius(8.0).outer_margin(egui::Margin { left: 30, bottom: 10, ..Default::default() }).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::both().id_salt(fold).max_height(320.0).show(ui, |ui| ui.add(egui::Label::new(RichText::new(proof).font(mono(12.0)).line_height(Some(18.0)).color(tones.text)).extend()));
+        });
+    }
+    ui.painter().hline(ui.available_rect_before_wrap().x_range(), ui.cursor().top(), Stroke::new(1.0, tones.line));
+    ui.add_space(1.0);
 }
 
 /// A key as it is printed on one, and what it does.
@@ -1049,10 +1118,11 @@ impl eframe::App for App {
         let open = self.open.as_mut().expect("a review is open");
         let links = open.data.links.clone();
         let modal = open.contents.is_some() || open.publish.is_some() || sheet.is_some();
+        let wide = ctx.content_rect().width() >= 860.0;
         let folds = egui::Id::new("rail folded");
         let mut folded = ctx.data(|data| data.get_temp::<bool>(folds)).unwrap_or(false);
         let pressed = |key: Key| !modal && pressed(key);
-        let step = (pressed(Key::L) || pressed(Key::ArrowRight)) as isize - (pressed(Key::H) || pressed(Key::ArrowLeft)) as isize;
+        let step = pressed(Key::ArrowRight) as isize - pressed(Key::ArrowLeft) as isize;
         if step != 0 {
             open.at = (open.at as isize + step).clamp(0, open.cards.len() as isize - 1) as usize;
             (open.in_diff, open.line, open.proof, open.range) = (false, 0, 0, None);
@@ -1076,17 +1146,16 @@ impl eframe::App for App {
         }
         let held = |key: Key| !typing && !modal && ctx.input(|input| input.modifiers.ctrl && input.key_pressed(key));
         let asking = std::mem::take(&mut open.asking);
-        if std::mem::take(&mut self.tab) && !modal {
-            let chat = open.agent && !open.minimized;
+        // The columns take the keys in turn: contents, card, diff, agent. Tab and l go on to the next, h back to the one before.
+        let across = std::mem::take(&mut self.tab) as isize + pressed(Key::L) as isize - pressed(Key::H) as isize;
+        if across != 0 && !modal {
             open.leave = true;
-            if asking {
-            } else if open.in_diff {
-                (open.in_diff, open.range, open.ask) = (false, None, chat);
-            } else if open.diff && open.group().is_some() {
-                (open.in_diff, open.moved) = (true, true);
-            } else {
-                open.ask = chat;
-            }
+            let columns: Vec<&str> = [("contents", wide), ("card", true), ("diff", open.diff && open.group().is_some()), ("agent", open.agent && !open.minimized)].into_iter().filter(|(_, there)| *there).map(|(name, _)| name).collect();
+            let now = if asking { "agent" } else if open.in_diff { "diff" } else if open.rail { "contents" } else { "card" };
+            let at = columns.iter().position(|name| *name == now).unwrap_or(0) as isize;
+            let to = columns[(at + across).rem_euclid(columns.len() as isize) as usize];
+            (open.rail, open.in_diff, open.ask, open.range) = (to == "contents", to == "diff", to == "agent", None);
+            open.moved |= to == "diff";
         }
         let down = (pressed(Key::J) || pressed(Key::ArrowDown)) as isize - (pressed(Key::K) || pressed(Key::ArrowUp)) as isize;
         let half = (pressed(Key::U) && !shift || pressed(Key::PageDown) || held(Key::D)) as isize - (pressed(Key::U) && shift || pressed(Key::PageUp) || held(Key::U)) as isize;
@@ -1107,11 +1176,32 @@ impl eframe::App for App {
             if ctx.input(|input| input.key_pressed(Key::Escape)) {
                 open.range = None;
             }
+        } else if open.rail {
+            let last = open.cards.len() as isize - 1;
+            let to = match end {
+                Some(bottom) => bottom as isize * last,
+                None => open.at as isize + down + half * 5,
+            };
+            if to.clamp(0, last) as usize != open.at {
+                (open.at, open.line, open.proof) = (to.clamp(0, last) as usize, 0, 0);
+            }
         } else {
             glide = ((down * 60 + half * 420) as f32, end);
-            if let (true, Card::Item(n)) = (pressed(Key::E), open.cards[open.at]) {
-                let count = open.data.review.items[n].evidence.len().max(1);
-                (open.proof, open.moved) = ((open.proof + if shift { count - 1 } else { 1 }) % count, true);
+            if let Card::Item(n) = open.cards[open.at] {
+                // e goes through the evidence, opening what each one holds; space opens or closes the one it is on.
+                let holds: Vec<bool> = open.data.review.items[n].evidence.iter().map(|evidence| evidence.text.as_ref().is_some_and(|text| !text.trim().is_empty())).collect();
+                let fold = |at: usize| egui::Id::new(("evidence open", &open.dir, n, at));
+                let opened = |at: usize| ctx.data(|data| data.get_temp::<bool>(fold(at))).unwrap_or(false);
+                let on = open.proof.min(holds.len().saturating_sub(1));
+                if pressed(Key::E) && !holds.is_empty() {
+                    let to = if shift { (on + holds.len() - 1) % holds.len() } else if holds[on] && !opened(on) { on } else { (on + 1) % holds.len() };
+                    ctx.data_mut(|data| data.insert_temp(fold(to), true));
+                    (open.proof, open.moved) = (to, true);
+                }
+                if pressed(Key::Space) && holds.get(on) == Some(&true) {
+                    let now = opened(on);
+                    ctx.data_mut(|data| data.insert_temp(fold(on), !now));
+                }
             }
             if let (true, Card::Item(n)) = (pressed(Key::Enter) || pressed(Key::O), open.cards[open.at]) {
                 if let Some(path) = open.data.review.items[n].evidence.get(open.proof).and_then(|evidence| evidence.path.as_ref()) {
@@ -1165,7 +1255,7 @@ impl eframe::App for App {
         let source = open.data.review.sources.first().cloned().unwrap_or_default();
         let changed = |sign: char| open.data.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
         let (added, removed) = (changed('+'), changed('-'));
-        let (plus, minus) = if tones.bg == INK { (Color32::from_rgb(95, 196, 138), Color32::from_rgb(255, 115, 105)) } else { (Color32::from_rgb(31, 138, 76), Color32::from_rgb(196, 40, 28)) };
+        let (plus, minus) = signs(&tones);
         egui::Panel::top("bar").frame(frame.inner_margin(egui::Margin::symmetric(18, 8))).show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(40.0);
@@ -1221,11 +1311,12 @@ impl eframe::App for App {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 folded ^= bare(ui, &tones, Icon::PanelLeft, "Collapse or open the contents column (B)", true, false);
                 ui.add_space(6.0);
-                turn -= bare(ui, &tones, Icon::ChevronLeft, "Back (h)", open.at > 0, true) as isize;
-                turn += bare(ui, &tones, Icon::ChevronRight, "Next (l)", open.at + 1 < open.cards.len(), true) as isize;
+                turn -= bare(ui, &tones, Icon::ChevronLeft, "Previous card (←)", open.at > 0, true) as isize;
+                turn += bare(ui, &tones, Icon::ChevronRight, "Next card (→)", open.at + 1 < open.cards.len(), true) as isize;
                 ui.add_space(8.0);
                 let name = match open.cards[open.at] {
                     Card::Summary => "summary".into(),
+                    Card::Verify => "verification".into(),
                     Card::Part(part) => format!("part {}", part + 1),
                     Card::Item(n) => format!("{} {}", kind(&open.data.review.items[n]), open.data.review.items[n].id),
                     Card::Thread(_) => "thread".into(),
@@ -1255,12 +1346,13 @@ impl eframe::App for App {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.set_clip_rect(ui.max_rect());
                     let item = matches!(open.cards[open.at], Card::Item(_));
-                    let here: &[(&str, &str)] = match (open.in_diff, item) {
-                        (true, _) => &[("j k", "line"), ("V", "select"), ("c", "comment")],
-                        (false, true) => &[("j k", "scroll"), ("a", "agree"), ("x", "dismiss"), ("c", "comment"), ("e", "evidence")],
-                        (false, false) => &[("j k", "scroll"), ("c", "comment")],
+                    let here: &[(&str, &str)] = match (open.in_diff, open.rail, item) {
+                        (true, _, _) => &[("j k", "line"), ("V", "select"), ("c", "comment")],
+                        (_, true, _) => &[("j k", "card")],
+                        (_, _, true) => &[("j k", "scroll"), ("a", "agree"), ("x", "dismiss"), ("c", "comment"), ("e", "evidence")],
+                        _ => &[("j k", "scroll"), ("c", "comment")],
                     };
-                    for (keys, does) in [("l", "next"), ("h", "back")].iter().chain(here).chain(&[("tab", "pane"), ("t", "ask"), ("d", "diff"), ("b", "contents"), ("p", "publish"), ("?", "help")]) {
+                    for (keys, does) in [("→", "next"), ("←", "back"), ("h l", "column")].iter().chain(here).chain(&[("t", "ask"), ("d", "diff"), ("b", "contents"), ("p", "publish"), ("?", "help")]) {
                         keycap(ui, &tones, keys, does);
                     }
                     if !open.note.is_empty() {
@@ -1284,7 +1376,6 @@ impl eframe::App for App {
 
         // The contents stand in a column beside every card: each part with what kind of code it is above its title,
         // and under it its items, their ids in one column and their titles in the next. Folded, it is a strip of marks.
-        let wide = ctx.content_rect().width() >= 860.0;
         if wide {
             let turned = ctx.data(|data| data.get_temp::<usize>(egui::Id::new("rail shows"))) != Some(open.at);
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("rail shows"), open.at));
@@ -1307,6 +1398,7 @@ impl eframe::App for App {
                         let row = if folded {
                             let short = match card {
                                 Card::Summary => Icon::List.unicode().to_string(),
+                                Card::Verify => if open.data.verify.as_ref().is_some_and(Verify::clean) { Icon::Check } else { Icon::X }.unicode().to_string(),
                                 Card::Part(part) => (part + 1).to_string(),
                                 Card::Item(_) => item.map(|item| item.id.clone()).unwrap_or_default(),
                                 Card::Thread(_) | Card::Note(_) => Icon::MessageSquare.unicode().to_string(),
@@ -1360,6 +1452,7 @@ impl eframe::App for App {
                     }
                     ui.add_space(28.0);
                 });
+                bar(ui, open.rail);
             });
         }
 
@@ -1502,7 +1595,7 @@ impl eframe::App for App {
                 bar(ui, open.in_diff);
             });
             if let Some(row) = clicked {
-                (open.in_diff, open.line, open.leave) = (true, row, true);
+                (open.in_diff, open.rail, open.line, open.leave) = (true, false, row, true);
             }
         }
 
@@ -1678,6 +1771,40 @@ impl eframe::App for App {
                                 ui.add_space(8.0);
                             }
                         }
+                        Card::Verify => {
+                            let run = open.data.verify.clone().unwrap_or_default();
+                            let part = |color| egui::TextFormat { font_id: mono(13.0), color, ..Default::default() };
+                            let mut over = egui::text::LayoutJob::default();
+                            over.append("Verification", 0.0, part(tones.strong));
+                            over.append(if run.clean() { " · confirmed by a run" } else { " · the run did not finish clean" }, 0.0, part(tones.dim));
+                            ui.label(over);
+                            title(ui, &tones, "Sandbox verification");
+                            prose(ui, &Tones { text: tones.dim, ..tones }, &links, "The change was started in a throwaway copy of the stack inside the pipeline job, and these are the steps and checks that ran against it.");
+                            head(ui, &tones, "Steps");
+                            for step in &run.steps {
+                                ran(ui, &tones, step.ok == Some(true), &step.step, &format!("{} s", step.seconds), if step.log.is_empty() { "This step printed nothing." } else { &step.log });
+                            }
+                            if !run.checks.is_empty() {
+                                ui.add_space(8.0);
+                                head(ui, &tones, "Checks");
+                            }
+                            for check in &run.checks {
+                                let status = check.status.as_str().map(String::from).unwrap_or_else(|| if check.status.is_null() { String::new() } else { check.status.to_string() });
+                                ran(ui, &tones, check.ok.unwrap_or(status == "200"), &check.name, &status, &check.detail);
+                            }
+                            if !run.api.is_empty() {
+                                ui.add_space(12.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("API under test:").size(13.0).color(tones.faint));
+                                    egui::Frame::new().fill(tones.raised).corner_radius(5.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| ui.label(RichText::new(&run.api).font(mono(11.5)).color(tones.dim)));
+                                });
+                            }
+                            for shown in run.media.iter().filter(|shown| shown.path.is_some()) {
+                                ui.add_space(14.0);
+                                artifact(ui, &open.dir, shown.path.as_deref().unwrap_or_default());
+                                ui.label(RichText::new(&shown.caption).size(13.0).color(tones.faint));
+                            }
+                        }
                         Card::Part(part) => {
                             let section = &open.data.review.sections[part];
                             let mut over = egui::text::LayoutJob::default();
@@ -1689,9 +1816,8 @@ impl eframe::App for App {
                             let within: Vec<(usize, &Item)> = open.data.review.items.iter().enumerate().filter(|(_, item)| item.section == Some(part)).collect();
                             if within.is_empty() {
                                 ui.label(RichText::new("Nothing to raise in this part.").size(13.0).color(tones.faint));
-                            } else {
-                                head(ui, &tones, "In this part");
                             }
+                            ui.add_space(8.0);
                             for (n, item) in within {
                                 ui.horizontal_top(|ui| {
                                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -1791,25 +1917,44 @@ impl eframe::App for App {
                             if !item.evidence.is_empty() {
                                 head(ui, &tones, format!("Evidence ({})", item.evidence.len()));
                             }
-                            for (n, evidence) in item.evidence.iter().enumerate() {
-                                ui.add_space(8.0);
-                                let current = !open.in_diff && n == open.proof;
-                                let shown = egui::Frame::new().fill(tones.pane).stroke(Stroke::new(1.0, if current && item.evidence.len() > 1 { tones.dim } else { tones.line })).corner_radius(8.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(proof(&evidence.provenance)).font(mono(12.5)).color(tones.faint));
-                                    ui.label(RichText::new(&evidence.caption).size(15.5).line_height(Some(leading(15.5))).color(tones.text));
-                                    if let Some(path) = &evidence.path {
-                                        ui.add_space(6.0);
-                                        artifact(ui, &open.dir, path);
+                            // Each is a line saying how it was established and what it shows. One that holds text opens to it; a picture stands under its line.
+                            for (at, evidence) in item.evidence.iter().enumerate() {
+                                let held = evidence.text.as_deref().map(str::trim).filter(|text| !text.is_empty());
+                                let fold = egui::Id::new(("evidence open", &open.dir, n, at));
+                                let mut opened = ui.data(|data| data.get_temp::<bool>(fold)).unwrap_or(false);
+                                let current = !open.in_diff && !open.rail && at == open.proof;
+                                ui.add_space(4.0);
+                                let row = ui.horizontal_top(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    if held.is_some() {
+                                        ui.add_sized([18.0, leading(15.5)], egui::Label::new(RichText::new(if opened { Icon::ChevronDown } else { Icon::ChevronRight }.unicode().to_string()).size(13.0).color(tones.faint)).selectable(false));
                                     }
-                                    if let Some(text) = evidence.text.as_ref().filter(|text| !text.trim().is_empty()) {
-                                        ui.add_space(6.0);
-                                        prose_at(ui, &tones, &links, text, 14.0);
-                                    }
+                                    let caption = if !evidence.caption.is_empty() { evidence.caption.as_str() } else if evidence.path.is_some() { "Figure" } else { "Trace" };
+                                    let mut line = egui::text::LayoutJob::default();
+                                    line.append(&proof(&evidence.provenance), 0.0, egui::TextFormat { font_id: mono(11.5), color: tones.faint, line_height: Some(leading(15.5)), valign: egui::Align::Center, ..Default::default() });
+                                    line.append(caption, 12.0, egui::TextFormat { font_id: FontId::proportional(15.5), color: if current && item.evidence.len() > 1 { tones.strong } else { tones.text }, line_height: Some(leading(15.5)), valign: egui::Align::Center, ..Default::default() });
+                                    ui.add(egui::Label::new(line).wrap().selectable(false));
                                 });
-                                if current && open.moved {
-                                    shown.response.scroll_to_me(None);
+                                let hit = ui.interact(row.response.rect, fold.with("line"), egui::Sense::click());
+                                if held.is_some() && fx::touch(ui, hit, tones.strong).clicked() {
+                                    opened = !opened;
+                                    ui.data_mut(|data| data.insert_temp(fold, opened));
                                 }
+                                if current && open.moved {
+                                    ui.scroll_to_rect(row.response.rect, None);
+                                }
+                                if let Some(path) = &evidence.path {
+                                    ui.add_space(6.0);
+                                    artifact(ui, &open.dir, path);
+                                }
+                                if let (true, Some(text)) = (opened, held) {
+                                    ui.add_space(4.0);
+                                    egui::Frame::new().fill(tones.pane).corner_radius(8.0).inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 2 }).show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        prose_at(ui, &tones, &links, text, 14.0);
+                                    });
+                                }
+                                ui.add_space(6.0);
                             }
                         }
                     }
@@ -1848,7 +1993,7 @@ impl eframe::App for App {
                     ui.add_space(28.0);
                 });
             });
-            bar(ui, !open.in_diff && !open.asking);
+            bar(ui, !open.in_diff && !open.asking && !open.rail);
         });
         if let Some(at) = jump {
             (open.at, open.in_diff, open.line, open.proof, open.range) = (at, false, 0, 0, None);
@@ -1886,7 +2031,7 @@ impl eframe::App for App {
 
         if let Some(mut on) = open.contents {
             let mut go = None;
-            let (down, enter, leave) = ctx.input(|input| ((input.key_pressed(Key::J) || input.key_pressed(Key::ArrowDown)) as isize - (input.key_pressed(Key::K) || input.key_pressed(Key::ArrowUp)) as isize, input.key_pressed(Key::Enter), input.key_pressed(Key::Escape)));
+            let (down, enter, leave) = ctx.input(|input| ((input.key_pressed(Key::J) || input.key_pressed(Key::ArrowDown)) as isize - (input.key_pressed(Key::K) || input.key_pressed(Key::ArrowUp)) as isize, input.key_pressed(Key::Enter) || input.key_pressed(Key::L) || input.key_pressed(Key::ArrowRight), input.key_pressed(Key::Escape)));
             on = (on as isize + down).clamp(0, open.cards.len() as isize - 1) as usize;
             let seen = egui::Id::new("contents row");
             let moved = ctx.data(|data| data.get_temp::<usize>(seen)) != Some(on);
@@ -1964,13 +2109,13 @@ impl eframe::App for App {
                 };
                 let said = |rows: &[(&'static str, &str)]| rows.iter().map(|(keys, does)| (*keys, does.to_string())).collect::<Vec<_>>();
                 if which == "keys" {
-                    rows(ui, "Moving", 92.0, &said(&[("l →", "Next card: the summary, each part, each finding"), ("h ←", "Previous card"), ("j k", "Scroll the card; in the diff, move one line"), ("u U", "Page down, page up"), ("g G", "The top, the bottom"), ("tab", "Move to the next panel: card, diff, agent"), ("b", "Contents: list every card and jump to one"), ("B", "Collapse the contents column to a strip, or open it"), ("q", "Back to your reviews")]));
-                    rows(ui, "Diff and evidence", 92.0, &said(&[("d", "Show or hide the diff"), ("V", "In the diff, select lines from here"), ("e E", "Evidence: next, previous"), ("enter o", "Open the evidence shown"), ("m", "Open the merge request in the browser"), ("S", "Stats: the change and the guide")]));
+                    rows(ui, "Moving", 92.0, &said(&[("→", "Next card: the summary, each part, each finding"), ("←", "Previous card"), ("l h", "Move to the next or previous column, as tab does: contents, card, diff, agent"), ("j k", "Scroll the card; in the contents column, move between cards; in the diff, move one line"), ("u U", "Page down, page up"), ("g G", "The top, the bottom"), ("b", "Contents: list every card and jump to one"), ("B", "Collapse the contents column to a strip, or open it"), ("q", "Back to your reviews")]));
+                    rows(ui, "Diff and evidence", 92.0, &said(&[("d", "Show or hide the diff"), ("V", "In the diff, select lines from here"), ("e E", "Evidence: next, opening its details, or the one before"), ("space", "Evidence: open or close the details"), ("enter o", "Open the picture or recording shown"), ("m", "Open the merge request in the browser"), ("S", "Stats: the change and the guide")]));
                     rows(ui, "Your review", 92.0, &said(&[("a x", "Agree with a finding, or dismiss it"), ("c", "Comment: on the card, or on the diff lines selected"), ("t", "Ask the agent"), ("v i", "Have it verify this card, or draw a diagram for it"), ("p", "Publish: see exactly what goes out first")]));
                 } else {
                     let review = &open.data.review;
                     let kinds = ["blocker", "fix", "suggestion", "question", "decision", "good"].iter().filter_map(|named| Some(review.items.iter().filter(|item| kind(item) == *named).count()).filter(|count| *count > 0).map(|count| format!("{count} {named}"))).collect::<Vec<_>>();
-                    rows(ui, "This review", 130.0, &[("Merge request", format!("{} {}", source.repo, source.reference)), ("Head", format!("{:.8} {} → {}", source.head_sha, source.branch, source.target)), ("Change", format!("{} files · +{added} −{removed}", open.data.files.len())), ("Guide", format!("{} parts · {} items", review.sections.len(), review.items.len())), ("Items", if kinds.is_empty() { "none".into() } else { kinds.join(" · ") }), ("Marked", format!("{} of {}", review.items.iter().filter(|item| open.verdict(&item.id).is_some()).count(), review.items.len()))]);
+                    rows(ui, "This review", 130.0, &[("Merge request", format!("{} {}", source.repo, source.reference)), ("Head", format!("{:.8} {} → {}", source.head_sha, source.branch, source.target)), ("Change", format!("{} files · +{added} −{removed}", open.data.files.len())), ("Guide", format!("{} parts · {} items", review.sections.len(), review.items.len())), ("Sandbox", open.data.verify.as_ref().map_or("not run".into(), |run| format!("{} of {} steps passed · {} s", run.steps.iter().filter(|step| step.ok == Some(true)).count(), run.steps.len(), run.steps.iter().map(|step| step.seconds).sum::<f64>()))), ("Items", if kinds.is_empty() { "none".into() } else { kinds.join(" · ") }), ("Marked", format!("{} of {}", review.items.iter().filter(|item| open.verdict(&item.id).is_some()).count(), review.items.len()))]);
                 }
             });
             if shown.should_close() {

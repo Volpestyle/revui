@@ -61,7 +61,7 @@ Two things it will not do:
 
 https://github.com/user-attachments/assets/f16af2b3-87a2-4b28-8c53-4a436c943290
 
-The same review in a window, with the same keys, drawn on the GPU by one Rust interface. The Mac app shows the list of your reviews and carries the `revui` it needs. `revui web <link>` serves the same interface to your browser, compiled to WebAssembly. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
+The same review in a window, drawn on the GPU by one Rust interface. The keys are the terminal's but for one thing: there are columns here (contents, card, diff, agent), so `h` and `l` move between them and the arrow keys turn the cards. The Mac app shows the list of your reviews and carries the `revui` it needs. `revui web <link>` serves the same interface to your browser, compiled to WebAssembly. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
 
 Both are built from a checkout of this repo for now: neither is in the releases yet.
 

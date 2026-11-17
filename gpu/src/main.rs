@@ -270,7 +270,7 @@ struct Open {
     diff: bool,
     contents: Option<usize>,
     in_diff: bool,
-    /// The contents column has the keys: j and k move between cards.
+    /// The contents column has the keys, as it does when a review opens: j and k move between cards.
     rail: bool,
     line: usize,
     moved: bool,
@@ -309,7 +309,7 @@ impl Open {
             cards.push(Card::Loose);
         }
         let at = std::env::var("REVUI_GPU_AT").ok().and_then(|at| at.parse::<usize>().ok()).unwrap_or(0).min(cards.len() - 1);
-        let mut open = Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, rail: false, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, range: None, floating: false, minimized: false, asking: false, leave: false, stamp: host::stamp(dir), looked: 0.0 };
+        let mut open = Self { dir: dir.into(), cards, at, diff: !data.product, data, contents: None, in_diff: false, rail: true, line: 0, moved: false, proof: 0, draft: String::new(), compose: false, publish: None, note: String::new(), painted: Default::default(), chat: Default::default(), agent: false, ask: false, range: None, floating: false, minimized: false, asking: false, leave: false, stamp: host::stamp(dir), looked: 0.0 };
         open.chat.sync(dir);
         Ok(open)
     }
@@ -1262,6 +1262,7 @@ impl eframe::App for App {
         let listed = open.contents.is_some();
         let modal = listed || open.publish.is_some() || sheet.is_some();
         let wide = ctx.content_rect().width() >= 860.0;
+        open.rail &= wide;
         let folds = egui::Id::new("rail folded");
         let mut folded = ctx.data(|data| data.get_temp::<bool>(folds)).unwrap_or(false);
         let pressed = |key: Key| !modal && pressed(key);
@@ -1526,7 +1527,9 @@ impl eframe::App for App {
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("rail shows"), open.at));
             egui::Panel::left("rail").exact_size(if folded { 54.0 } else { 300.0 }).resizable(false).frame(frame.inner_margin(egui::Margin { left: if folded { 6 } else { 10 }, right: if folded { 6 } else { 10 }, top: 14, bottom: 0 })).show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("rail").auto_shrink(false).show(ui, |ui| {
-                    jump = contents(ui, open, &tones, folded, None, turned).or(jump);
+                    if let Some(pressed) = contents(ui, open, &tones, folded, None, turned) {
+                        (jump, open.rail) = (Some(pressed), true);
+                    }
                     ui.add_space(28.0);
                 });
                 bar(ui, open.rail);
@@ -1678,6 +1681,9 @@ impl eframe::App for App {
 
         let beside = open.diff && open.group().is_some();
         egui::CentralPanel::default().frame(frame.inner_margin(if beside { egui::Margin { left: 22, right: 22, top: 18, bottom: 0 } } else { egui::Margin { left: 30, right: 30, top: 26, bottom: 0 } })).show_inside(ui, |ui| {
+            if ui.rect_contains_pointer(ui.max_rect()) && ui.input(|input| input.pointer.primary_pressed()) {
+                open.rail = false;
+            }
             // The card is one column: beside the diff it keeps to the left, alone it sits in the middle.
             const COLUMN: f32 = 800.0;
             let inset = if beside { 0.0 } else { ((ui.available_width() - COLUMN) / 2.0).max(0.0) };

@@ -1,5 +1,5 @@
 //! What drawing on the GPU buys: small effects with a fragment shader of their own (`fx.wgsl`), laid over or under
-//! what egui draws. A sheen and a ripple on what the pointer can press, drifting contours in the summary's slab,
+//! what egui draws. A sheen and a ripple on what the pointer can press,
 //! a band of light while the agent works, and a card that eases in when you turn to it.
 
 use eframe::egui::{self, Color32, Pos2, Rect};
@@ -16,12 +16,11 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 enum Kind {
     Ripple,
     Glow,
-    Flow,
     Shimmer,
 }
 
 struct Gpu {
-    pipelines: [wgpu::RenderPipeline; 4],
+    pipelines: [wgpu::RenderPipeline; 3],
     slots: wgpu::Buffer,
 }
 
@@ -59,7 +58,7 @@ pub fn install(cc: &eframe::CreationContext<'_>) {
     let Some(state) = cc.wgpu_render_state.as_ref() else { return };
     let device = &state.device;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("fx"), source: wgpu::ShaderSource::Wgsl(include_str!("fx.wgsl").into()) });
-    let pipelines = ["ripple", "glow", "flow", "shimmer"].map(|entry| {
+    let pipelines = ["ripple", "glow", "shimmer"].map(|entry| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(entry),
             layout: None,
@@ -121,17 +120,6 @@ pub fn touch(ui: &egui::Ui, hit: egui::Response, ink: Color32) -> egui::Response
         }
     }
     hit.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-/// Contour lines drifting slowly across `rect`, brighter near the pointer. `under` is a shape reserved before
-/// the contents of the rectangle were drawn, so the lines sit behind them.
-pub fn flow(ui: &egui::Ui, under: egui::layers::ShapeIdx, rect: Rect, lines: Color32) {
-    let ctx = ui.ctx();
-    let seconds = ctx.input(|input| input.time % 3600.0) as f32;
-    ui.painter().set(under, shape(Kind::Flow, rect, ctx.pointer_hover_pos(), seconds, lines, [ui.opacity(), 0.0]));
-    if ctx.input(|input| input.focused) {
-        ctx.request_repaint_after(std::time::Duration::from_millis(33));
-    }
 }
 
 /// A band of light travelling along `rect`, for as long as something is at work.

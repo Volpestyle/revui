@@ -1611,7 +1611,7 @@ impl eframe::App for App {
                                     node.opens = changed.iter().find(|path| owns.iter().any(|(id, folder)| *id == node.id && path.starts_with(folder))).map(|path| path.to_string());
                                 }
                             }
-                            let labels = named.unwrap_or(nodes.len() <= 14);
+                            let labels = named.unwrap_or(nodes.len() <= 24);
                             egui::Frame::new().fill(tones.bg).stroke(Stroke::new(1.0, tones.line)).corner_radius(12.0).inner_margin(14.0).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {

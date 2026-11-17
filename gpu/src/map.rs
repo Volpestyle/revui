@@ -102,9 +102,9 @@ pub fn parse(text: &str) -> (Vec<Node>, Vec<Edge>) {
     (nodes, edges)
 }
 
-/// Half the side of a block and the gap between two, on the ground the map stands on.
-const HALF: f32 = 44.0;
-const APART: f32 = 181.0;
+/// Half the side of a block, and the gaps between two: wider along the way calls run, so names have room.
+const HALF: f32 = 40.0;
+const APART: egui::Vec2 = vec2(230.0, 210.0);
 
 fn rise(node: &Node) -> f32 {
     if node.tall > 0.0 { node.tall } else if node.form == Form::Store { 35.0 } else { 21.0 }
@@ -131,7 +131,7 @@ pub struct Show {
 }
 
 /// Where the map is seen from: turned about its middle, tilted, moved and brought closer by the pointer.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Camera {
     turn: f32,
     tilt: f32,
@@ -139,7 +139,68 @@ struct Camera {
     moved: egui::Vec2,
 }
 
-const HOME: Camera = Camera { turn: std::f32::consts::FRAC_PI_4, tilt: std::f32::consts::FRAC_PI_6, zoom: 1.0, moved: egui::Vec2::ZERO };
+const HOME: Camera = Camera { turn: 0.3, tilt: 0.98, zoom: 1.0, moved: egui::Vec2::ZERO };
+
+/// Where each block stands. Columns go by how far a component sits from the entry points, so calls read left to
+/// right; a call that leads back to something already on the way (a webhook, an event) does not count, or a loop
+/// would push its members out without end. Within a column, a block sits near what it talks to, so fewer calls
+/// cross. With no calls to go by, the blocks stand in a square.
+fn stand<'a>(nodes: &'a [Node], edges: &[Edge]) -> BTreeMap<&'a str, egui::Vec2> {
+    let index = |id: &str| nodes.iter().position(|node| node.id == id);
+    let calls: Vec<(usize, usize)> = edges.iter().filter_map(|edge| Some((index(&edge.from)?, index(&edge.to)?))).filter(|(from, to)| from != to).collect();
+    let out = |from: usize| calls.iter().filter(move |call| call.0 == from).map(|call| call.1);
+    let (mut seen, mut back) = (vec![0u8; nodes.len()], Vec::new());
+    for root in 0..nodes.len() {
+        if seen[root] != 0 {
+            continue;
+        }
+        seen[root] = 1;
+        let mut walk = vec![(root, out(root).collect::<Vec<_>>())];
+        while let Some((from, ahead)) = walk.last_mut() {
+            match ahead.pop() {
+                Some(to) if seen[to] == 0 => {
+                    seen[to] = 1;
+                    walk.push((to, out(to).collect()));
+                }
+                Some(to) if seen[to] == 1 => back.push((*from, to)),
+                Some(_) => {}
+                None => {
+                    seen[*from] = 2;
+                    walk.pop();
+                }
+            }
+        }
+    }
+    let mut depth = vec![0usize; nodes.len()];
+    for _ in 0..nodes.len() {
+        for &(from, to) in calls.iter().filter(|call| !back.contains(call)) {
+            depth[to] = depth[to].max(depth[from] + 1);
+        }
+    }
+    let wide = (nodes.len() as f32).sqrt().ceil().max(1.0) as usize;
+    let mut columns: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    (0..nodes.len()).for_each(|n| columns.entry(if calls.is_empty() { n / wide } else { depth[n] }).or_default().push(n));
+    let mut columns: Vec<Vec<usize>> = columns.into_values().collect();
+    let tallest = columns.iter().map(Vec::len).max().unwrap_or(1) as f32;
+    let mut row = vec![0.0; nodes.len()];
+    let settle = |column: &[usize], row: &mut Vec<f32>| column.iter().enumerate().for_each(|(n, &node)| row[node] = n as f32 + (tallest - column.len() as f32) / 2.0);
+    columns.iter().for_each(|column| settle(column, &mut row));
+    for sweep in 0..6 {
+        for at in 0..columns.len() {
+            let at = if sweep % 2 == 0 { at } else { columns.len() - 1 - at };
+            let pull = |node: usize| {
+                let near: Vec<f32> = calls.iter().filter_map(|&(from, to)| if from == node { Some(row[to]) } else if to == node { Some(row[from]) } else { None }).collect();
+                if near.is_empty() { row[node] } else { near.iter().sum::<f32>() / near.len() as f32 }
+            };
+            let mut pulled: Vec<(f32, usize)> = columns[at].iter().map(|&node| (pull(node), node)).collect();
+            pulled.sort_by(|a, b| a.0.total_cmp(&b.0));
+            columns[at] = pulled.into_iter().map(|(_, node)| node).collect();
+            settle(&columns[at], &mut row);
+        }
+    }
+    let middle = vec2((columns.len() as f32 - 1.0) / 2.0, (tallest - 1.0) / 2.0);
+    columns.iter().enumerate().flat_map(|(column, members)| members.iter().map(move |&node| (column, node))).map(|(column, node)| (nodes[node].id.as_str(), (vec2(column as f32, row[node]) - middle) * APART)).collect()
+}
 
 impl Camera {
     /// A point of the ground, `up` above it, as the eye sees it: across, down the screen, and how near.
@@ -180,39 +241,18 @@ pub fn folders(tree: &BTreeMap<String, usize>, changed: &[&str]) -> (Vec<Node>, 
 }
 
 /// The map as blocks you can turn: drag turns and tilts it, shift-drag moves it, a pinch brings it closer and a
-/// double click beside the blocks puts it back. What is new, changed or removed is lit. Returns the file of a
-/// block that was clicked, for the caller to open. Columns go by how far a component sits from
-/// the entry points, so calls read left to right; with no calls to go by, the blocks stand in a square.
+/// double click beside the blocks puts it back. What is new, changed or removed is lit. Pointing at a block brings
+/// out what it calls and what calls it, and lets the rest fall back. Returns the file of a block that was clicked,
+/// for the caller to open.
 pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show: Show) -> Option<String> {
-    let mut depth: BTreeMap<&str, usize> = nodes.iter().map(|node| (node.id.as_str(), 0)).collect();
-    for _ in 0..nodes.len() {
-        for edge in edges.iter().filter(|edge| edge.from != edge.to) {
-            let (from, to) = (depth[edge.from.as_str()], depth[edge.to.as_str()]);
-            if to <= from && from < nodes.len() {
-                depth.insert(edge.to.as_str(), from + 1);
-            }
-        }
-    }
-    let mut columns: BTreeMap<usize, Vec<&Node>> = BTreeMap::new();
-    let wide = (nodes.len() as f32).sqrt().ceil() as usize;
-    for (n, node) in nodes.iter().enumerate() {
-        columns.entry(if edges.is_empty() { n / wide.max(1) } else { depth[node.id.as_str()] }).or_default().push(node);
-    }
-    let tallest = columns.values().map(Vec::len).max().unwrap_or(1) as f32;
-    let mut at: BTreeMap<&str, egui::Vec2> = BTreeMap::new();
-    for (&column, members) in &columns {
-        for (n, node) in members.iter().enumerate() {
-            at.insert(node.id.as_str(), vec2(column as f32, n as f32 + (tallest - members.len() as f32) / 2.0) * APART);
-        }
-    }
-    let middle = vec2((columns.len() as f32 - 1.0) / 2.0, (tallest - 1.0) / 2.0) * APART;
-    at.values_mut().for_each(|spot| *spot -= middle);
-
+    let at = stand(nodes, edges);
     let home: Vec<egui::Vec2> = at.values().map(|spot| HOME.sees(*spot, 0.0).0).collect();
     let span = |pick: fn(&egui::Vec2) -> f32| (home.iter().map(pick).fold(f32::MAX, f32::min), home.iter().map(pick).fold(f32::MIN, f32::max));
     let ((left, right), (top, bottom)) = (span(|spot| spot.x), span(|spot| spot.y));
-    let fit = (ui.available_width() / (right - left + 220.0)).min(1.0);
-    let (rect, hit) = ui.allocate_exact_size(vec2(ui.available_width(), (bottom - top + 150.0) * fit), egui::Sense::click_and_drag());
+    // Room around the blocks for their names, and never so tall that the map pushes the rest of the card away.
+    let room = vec2(right - left + 250.0, bottom - top + 190.0);
+    let fit = (ui.available_width() / room.x).min(560.0 / room.y).min(1.15);
+    let (rect, hit) = ui.allocate_exact_size(vec2(ui.available_width(), (room.y * fit).max(240.0)), egui::Sense::click_and_drag());
 
     let id = egui::Id::new("map camera");
     let mut camera = ui.data(|data| data.get_temp::<Camera>(id)).unwrap_or(HOME);
@@ -224,13 +264,17 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show
             (camera.turn, camera.tilt) = (camera.turn - by.x * 0.008, (camera.tilt + by.y * 0.005).clamp(0.2, 1.35));
         }
     }
-    if hit.hovered() {
-        camera.zoom = (camera.zoom * ui.input(|input| input.zoom_delta())).clamp(0.4, 4.0);
+    if let Some(pointer) = hit.hover_pos() {
+        // A pinch brings what is under the pointer closer, and keeps it under the pointer.
+        let closer = (camera.zoom * ui.input(|input| input.zoom_delta())).clamp(0.4, 4.0);
+        camera.moved += (pointer - rect.center() - camera.moved) * (1.0 - closer / camera.zoom);
+        camera.zoom = closer;
     }
 
+    let mut kept = camera;
     let painter = ui.painter_at(rect);
     let scale = fit * camera.zoom;
-    let centre = rect.center() + vec2(0.0, 21.0 * fit) + camera.moved - vec2(left + right, top + bottom) / 2.0 * scale;
+    let centre = rect.center() + vec2(0.0, 24.0 * fit) + camera.moved - vec2(left + right, top + bottom) / 2.0 * scale;
     let place = |spot: egui::Vec2, up: f32| centre + camera.sees(spot, up).0 * scale;
     let lit = |node: &Node| match node.state {
         Some("changed") => Some(Color32::from_rgb(217, 162, 63)),
@@ -238,29 +282,38 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show
         Some("removed") => Some(Color32::from_rgb(208, 85, 92)),
         _ => None,
     };
-    let over = hit.hover_pos().and_then(|pointer| {
+    let over = hit.hover_pos().filter(|_| !hit.dragged()).and_then(|pointer| {
         let near = |node: &&Node| (place(at[node.id.as_str()], rise(node) / 2.0) - pointer).length();
-        nodes.iter().min_by(|a, b| near(a).total_cmp(&near(b))).filter(|node| near(node) < 50.0 * scale)
+        nodes.iter().min_by(|a, b| near(a).total_cmp(&near(b))).filter(|node| near(node) < 46.0 * scale)
     });
-    let kept = if hit.double_clicked() && over.is_none() { HOME } else { camera };
-    ui.data_mut(|data| data.insert_temp(id, kept));
+    if hit.double_clicked() && over.is_none() {
+        kept = HOME;
+    }
     let opened = over.filter(|_| hit.clicked()).and_then(|node| node.opens.clone());
     let held = if hit.dragged() { egui::CursorIcon::Grabbing } else if over.is_some_and(|node| node.opens.is_some()) { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Grab };
     let hit = hit.on_hover_cursor(held);
+    // With a block pointed at, it and what it talks to stay as they are, and everything else falls back.
+    let joins = |edge: &Edge, id: &str| edge.from == id || edge.to == id;
+    let near = |id: &str| over.is_none_or(|over| over.id == id || edges.iter().any(|edge| joins(edge, &over.id) && joins(edge, id)));
+    let fade = |color: Color32, on: bool| if on { color } else { color.gamma_multiply(0.22) };
     let (sin, cos) = camera.turn.sin_cos();
     let squash = camera.tilt.sin();
     let mut order: Vec<&Node> = nodes.iter().collect();
     order.sort_by(|a, b| camera.sees(at[a.id.as_str()], 0.0).1.total_cmp(&camera.sees(at[b.id.as_str()], 0.0).1));
     for node in &order {
-        let (spot, up) = (at[node.id.as_str()], rise(node));
+        let (spot, up, on) = (at[node.id.as_str()], rise(node), near(&node.id));
         let (face, flank, line) = match lit(node) {
             Some(color) => (mix(color, look.raised, 0.62), mix(color, look.raised, 0.38), color),
-            None => (look.top, look.side, look.edge),
+            None => (look.top, look.side, look.edge.gamma_multiply(0.7)),
         };
-        let stroke = Stroke::new(if over.is_some_and(|over| over.id == node.id) { 2.0 } else { 1.0 }, line);
+        let (face, flank) = (fade(face, on), fade(flank, on));
+        let stroke = Stroke::new(if over.is_some_and(|over| over.id == node.id) { 2.0 } else { 1.0 }, fade(line, on));
+        // A soft patch of ground under each block, so it stands on something.
+        let foot = [vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0)].map(|corner| place(spot + corner * (HALF + 9.0), 0.0));
+        painter.add(Shape::convex_polygon(foot.to_vec(), Color32::from_black_alpha(if on { 46 } else { 12 }), Stroke::NONE));
         if node.form == Form::Store {
             let (ground, top) = (place(spot, 0.0), place(spot, up));
-            let (rx, ry) = (46.0 * scale, 46.0 * scale * squash);
+            let (rx, ry) = (HALF * 1.05 * scale, HALF * 1.05 * scale * squash);
             painter.add(Shape::ellipse_filled(ground, vec2(rx, ry), flank));
             painter.add(Shape::ellipse_stroke(ground, vec2(rx, ry), stroke));
             painter.rect_filled(egui::Rect::from_min_max(pos2(top.x - rx, top.y), pos2(top.x + rx, ground.y)), 0.0, flank);
@@ -285,27 +338,62 @@ pub fn draw(ui: &mut egui::Ui, look: &Look, nodes: &[Node], edges: &[Edge], show
         }
         painter.add(Shape::convex_polygon(corners.map(|corner| place(corner, up)).to_vec(), face, stroke));
     }
+    // A call is an arc from one block's top to the next, lifted off the ground so it passes over what stands
+    // between them. They stay quiet until a block is pointed at: then its own are drawn full, with what they carry.
     let found = |id: &str| nodes.iter().find(|node| node.id == id).map(|node| (at[id], rise(node)));
+    let mut said = Vec::new();
     for edge in edges.iter().filter(|_| show.calls) {
         let (Some((from, up)), Some((to, down))) = (found(&edge.from), found(&edge.to)) else { continue };
         let way = to - from;
-        let clear = way.normalized() * (HALF * 1.3).min(way.length() * 0.45);
-        let (start, end) = (place(from + clear, up), place(to - clear, down));
-        let stroke = Stroke::new(1.5, if edge.new { Color32::from_rgb(63, 168, 100) } else { look.edge });
-        painter.line_segment([start, end], stroke);
-        let (along, across) = ((end - start).normalized() * 9.0, (end - start).normalized().rot90() * 4.5);
-        painter.add(Shape::convex_polygon(vec![end, end - along + across, end - along - across], stroke.color, Stroke::NONE));
-        if !edge.label.is_empty() && show.labels {
-            painter.text(start + (end - start) / 2.0 - vec2(0.0, 6.0), Align2::CENTER_BOTTOM, &edge.label, FontId::monospace(11.0), look.edge);
+        let clear = way.normalized() * (HALF * 0.9).min(way.length() * 0.45);
+        let lift = (way.length() * 0.16).min(70.0);
+        let arc: Vec<egui::Pos2> = (0..=18).map(|n| n as f32 / 18.0).map(|t| place(from + clear + (way - clear * 2.0) * t, up + (down - up) * t + lift * 4.0 * t * (1.0 - t))).collect();
+        let own = over.is_some_and(|over| joins(edge, &over.id));
+        let ink = if edge.new { Color32::from_rgb(63, 168, 100) } else if own { look.text } else { look.edge };
+        // Unasked, the calls to and from what the change touches read a little stronger than the rest.
+        let touched = [&edge.from, &edge.to].iter().any(|id| nodes.iter().any(|node| node.id == **id && lit(node).is_some()));
+        let ink = ink.gamma_multiply(if own { 1.0 } else if over.is_some() { 0.08 } else if edge.new { 0.9 } else if touched { 0.5 } else { 0.24 });
+        let (end, before) = (arc[18], arc[17]);
+        let (along, across) = ((end - before).normalized() * 8.0, (end - before).normalized().rot90() * 3.6);
+        painter.add(Shape::line(arc.clone(), Stroke::new(if own { 1.8 } else { 1.2 }, ink)));
+        painter.add(Shape::convex_polygon(vec![end, end - along + across, end - along - across], ink, Stroke::NONE));
+        if !edge.label.is_empty() && (own || (edge.new && over.is_none())) {
+            said.push((arc[9] - vec2(0.0, 5.0), edge.label.as_str(), ink));
         }
     }
-    for node in nodes.iter().filter(|node| show.labels || lit(node).is_some() || over.is_some_and(|over| over.id == node.id)) {
-        let spot = place(at[node.id.as_str()], rise(node)) - vec2(0.0, HALF * 1.42 * squash * scale + 9.0);
-        painter.text(spot, Align2::CENTER_BOTTOM, &node.label, FontId::new(13.0, egui::FontFamily::Name("bold".into())), look.text);
+    // Names go on last, the ones that matter first, and one that would sit on another is left for a closer look.
+    let mut named: Vec<&Node> = nodes.iter().filter(|node| show.labels || lit(node).is_some() || over.is_some_and(|over| over.id == node.id)).collect();
+    named.sort_by_key(|node| (over.is_none_or(|over| over.id != node.id), !near(&node.id), lit(node).is_none()));
+    let mut taken: Vec<egui::Rect> = Vec::new();
+    for node in named {
+        let (on, pointed) = (near(&node.id), over.is_some_and(|over| over.id == node.id));
+        let ink = if pointed || lit(node).is_some() { look.text } else { look.edge };
+        let name = painter.layout(node.label.clone(), FontId::new(12.5, egui::FontFamily::Name(if lit(node).is_some() || pointed { "bold" } else { "medium" }.into())), fade(ink, on), (APART.x * scale - 18.0).clamp(84.0, 150.0));
+        let foot = place(at[node.id.as_str()], rise(node)) - vec2(0.0, HALF * 1.42 * squash * scale + 7.0);
+        let spot = egui::Rect::from_min_size(pos2(foot.x - name.size().x / 2.0, foot.y - name.size().y), name.size());
+        if !pointed && taken.iter().any(|other| other.intersects(spot.expand(2.0))) {
+            continue;
+        }
+        taken.push(spot);
+        painter.rect_filled(spot.expand2(vec2(4.0, 1.0)), 4.0, ui.visuals().panel_fill.gamma_multiply(0.72));
+        painter.galley(spot.min, name, ink);
+    }
+    for (spot, label, ink) in said {
+        let text = painter.layout_no_wrap(label.to_string(), FontId::monospace(11.0), ink);
+        let back = egui::Rect::from_center_size(spot - vec2(0.0, text.size().y / 2.0), text.size() + vec2(10.0, 4.0));
+        painter.rect_filled(back, 4.0, look.raised);
+        painter.galley(back.min + vec2(5.0, 2.0), text, ink);
     }
     if hit.hovered() {
-        painter.text(rect.right_bottom() - vec2(2.0, 0.0), Align2::RIGHT_BOTTOM, "drag to turn · shift-drag to move · pinch to zoom · double-click to reset", FontId::monospace(10.5), look.edge);
+        painter.text(rect.left_bottom() + vec2(2.0, 0.0), Align2::LEFT_BOTTOM, "drag to turn · shift-drag to move · pinch to zoom · double-click to reset", FontId::monospace(10.5), look.edge.gamma_multiply(0.7));
     }
+    if kept != HOME {
+        let corner = egui::Rect::from_min_max(rect.right_bottom() - vec2(92.0, 26.0), rect.right_bottom());
+        if ui.put(corner, egui::Button::new(egui::RichText::new("Reset view").size(12.0).color(look.edge)).frame(false)).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            kept = HOME;
+        }
+    }
+    ui.data_mut(|data| data.insert_temp(id, kept));
     if let Some(node) = over {
         let does = node.opens.as_ref().map_or(String::new(), |file| format!("\nClick to open {file}"));
         hit.on_hover_text_at_pointer(if node.note.is_empty() { format!("{}{does}", node.label) } else { format!("{} · {}{does}", node.label, node.note) });
@@ -326,6 +414,18 @@ mod tests {
         assert!(found("db").form == Form::Store && found("queue").form == Form::Queue && found("queue").state == Some("added"));
         assert_eq!(edges.len(), 3);
         assert!(edges[2].new && edges[2].label == "new" && edges[2].to == "queue");
+    }
+
+    #[test]
+    fn a_loop_of_calls_does_not_push_its_members_out() {
+        let (nodes, edges) = parse("flowchart LR\n  web --> api\n  api --> pmc\n  pmc --> events\n  events --> pmc\n  stripe --> api\n  api --> stripe\n  pmc --> google");
+        let at = stand(&nodes, &edges);
+        let column = |id: &str| ((at[id].x - at["web"].x) / APART.x).round() as i32;
+        assert_eq!([column("web"), column("api"), column("pmc"), column("stripe"), column("events"), column("google")], [0, 1, 2, 2, 3, 3]);
+        let mut spots: Vec<(i32, i32)> = at.values().map(|spot| (spot.x.round() as i32, spot.y.round() as i32)).collect();
+        spots.sort();
+        spots.dedup();
+        assert_eq!(spots.len(), nodes.len(), "no two blocks stand on one spot");
     }
 
     #[test]

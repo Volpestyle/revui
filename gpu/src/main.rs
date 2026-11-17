@@ -738,10 +738,15 @@ fn contents(ui: &mut egui::Ui, open: &Open, tones: &Tones, folded: bool, pick: O
         if !nested && n > 0 {
             ui.add_space(if folded { 8.0 } else { 12.0 });
         }
+        // The summary and the sandbox run have a sign of their own, which stands before their name and is all the folded strip shows of them.
+        let sign = match card {
+            Card::Summary => Some((Icon::Menu, tones.dim)),
+            Card::Verify => Some((Icon::FlaskConical, if open.data.verify.as_ref().is_some_and(Verify::clean) { tones.dim } else { signs(tones).1 })),
+            _ => None,
+        };
         let row = if folded {
             let short = match card {
-                Card::Summary => Icon::List.unicode().to_string(),
-                Card::Verify => if open.data.verify.as_ref().is_some_and(Verify::clean) { Icon::Check } else { Icon::X }.unicode().to_string(),
+                Card::Summary | Card::Verify => sign.map(|(icon, _)| icon.unicode().to_string()).unwrap_or_default(),
                 Card::Part(part) => (part + 1).to_string(),
                 Card::Item(_) => item.map(|item| item.id.clone()).unwrap_or_default(),
                 Card::Thread(_) | Card::Note(_) => Icon::MessageSquare.unicode().to_string(),
@@ -749,7 +754,11 @@ fn contents(ui: &mut egui::Ui, open: &Open, tones: &Tones, folded: bool, pick: O
             };
             egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(0, 6)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.vertical_centered(|ui| ui.add(egui::Label::new(RichText::new(short).font(mono(12.0)).color(if nested { mark } else { ink })).selectable(false)));
+                let (size, color) = match sign {
+                    Some((_, color)) => (if matches!(card, Card::Summary) { 12.5 } else { 15.0 }, if on { tones.strong } else { color }),
+                    None => (12.0, if nested { mark } else { ink }),
+                };
+                ui.vertical_centered(|ui| ui.add(egui::Label::new(RichText::new(short).font(mono(size)).color(color)).selectable(false)));
             })
         } else if nested {
             let row = egui::Frame::new().fill(fill).outer_margin(egui::Margin { left: 10, ..Default::default() }).inner_margin(egui::Margin { left: 12, right: 10, top: 5, bottom: 5 }).show(ui, |ui| {
@@ -782,7 +791,15 @@ fn contents(ui: &mut egui::Ui, open: &Open, tones: &Tones, folded: bool, pick: O
                     Card::Part(part) => open.data.review.sections[*part].title.clone(),
                     other => open.label(*other),
                 };
-                ui.add(egui::Label::new(RichText::new(name).font(display(large)).line_height(Some((large * 1.42_f32).round())).color(if on { tones.strong } else { tones.text })).wrap().selectable(false));
+                let name = egui::Label::new(RichText::new(name).font(display(large)).line_height(Some((large * 1.42_f32).round())).color(if on { tones.strong } else { tones.text })).wrap().selectable(false);
+                match sign {
+                    Some((icon, color)) => drop(ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 9.0;
+                        ui.add_sized([16.0, (large * 1.42_f32).round()], egui::Label::new(RichText::new(icon.unicode().to_string()).size(if matches!(card, Card::Summary) { 12.5 } else { 15.0 }).color(color)).selectable(false));
+                        ui.add(name);
+                    })),
+                    None => drop(ui.add(name)),
+                }
             })
         };
         let hit = row.response.interact(egui::Sense::click());
@@ -1860,7 +1877,8 @@ impl eframe::App for App {
                             let part = |color| egui::TextFormat { font_id: mono(13.0), color, ..Default::default() };
                             let mut over = egui::text::LayoutJob::default();
                             over.append("Verification", 0.0, part(tones.strong));
-                            over.append(if run.clean() { " · smoke test passed" } else { " · the run did not finish clean" }, 0.0, part(tones.dim));
+                            let outcome = if !run.clean() { " · the run did not finish clean".to_string() } else if run.checks.len() > 1 { format!(" · {} checks run by the reviewer", run.checks.len() - 1) } else { " · smoke test passed".into() };
+                            over.append(&outcome, 0.0, part(tones.dim));
                             ui.label(over);
                             title(ui, &tones, "Sandbox verification");
                             prose(ui, &Tones { text: tones.dim, ..tones }, &links, "The change was started in a throwaway copy of the stack inside the pipeline job, and these are the steps and checks that ran against it.");

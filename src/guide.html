@@ -194,6 +194,11 @@ body.pinned .frame { display: flex; flex: 1; min-height: 0; }
 .rail .short { display: none; font: 500 12px "Geist Mono", ui-monospace, monospace; }
 .rail .short svg { display: block; width: 15px; height: 15px; margin: auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .rail .short.failed { color: var(--blocker); }
+body:not(.narrow) .rail a.part:has(.mark), .contents .rail a.part:has(.mark) { display: flex; flex-direction: row-reverse; justify-content: flex-end; align-items: center; gap: 9px; }
+.rail .short.mark { display: block; width: 16px; text-align: center; color: var(--soft); }
+.rail .short.mark.failed { color: var(--blocker); }
+.rail .short.mark svg { margin: 0; }
+body.narrow .frame > .rail .short.mark { margin: 0 auto; }
 body.narrow .frame > .rail { flex-basis: 54px; padding: 14px 6px 28px; overflow-x: hidden; }
 body.narrow .frame > .rail a, body.narrow .frame > .rail a.sub { display: block; padding: 6px 0; text-align: center; margin: 0; border-left: 0; }
 body.narrow .frame > .rail a.part { margin-top: 8px; }
@@ -611,7 +616,7 @@ const verifyStep = verify
     ? step({
           id: 'verification',
           name: 'verification',
-          text: `<div class="kind"><b>Verification</b> · ${verified ? 'smoke test passed' : 'the run did not finish clean'}</div>
+          text: `<div class="kind"><b>Verification</b> · ${!verified ? 'the run did not finish clean' : (verify.checks ?? []).length > 1 ? `${verify.checks.length - 1} checks run by the reviewer` : 'smoke test passed'}</div>
 <h2>Sandbox verification</h2>
 <p class="plain">The change was started in a throwaway copy of the stack inside the pipeline job, and these are the steps and checks that ran against it.</p>
 <p class="plain">${escape(verify.scope ?? 'This is a fixed smoke test, the same for every merge request: it shows the branch still starts and answers. It does not exercise what this change altered.')}</p>
@@ -710,9 +715,9 @@ const railItem = (item) =>
     `<a href="#${escape(item.id)}" class="sub ${escape(label(item))}" title="${escape(label(item))} ${escape(item.id)}"><span class="id">${escape(item.id)}</span><span class="name">${inline(item.title)}</span><span class="short">${escape(item.id)}</span></a>`;
 
 const rail = [
-    `<a href="#summary" class="part"><span class="name">Summary</span><span class="short">≡</span></a>`,
+    `<a href="#summary" class="part"><span class="name">Summary</span><span class="short mark">≡</span></a>`,
     verify
-        ? `<a href="#verification" class="part"><span class="name">Sandbox verification</span><span class="short${verified ? '' : ' failed'}"><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3M7.5 15h9"/></svg></span></a>`
+        ? `<a href="#verification" class="part"><span class="name">Sandbox verification</span><span class="short mark${verified ? '' : ' failed'}"><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3M7.5 15h9"/></svg></span></a>`
         : '',
     ...sections.flatMap((section, index) => [
         `<a href="#part-${index + 1}" class="part" title="${escape(section.title)}"><span class="over">${index + 1}${section.tier ? ` · ${escape(section.tier)}` : ''}</span><span class="name">${inline(section.title)}</span><span class="short">${index + 1}</span></a>`,

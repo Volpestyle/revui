@@ -111,8 +111,19 @@ li { margin-bottom: 4px; }
 a.at:hover { color: var(--text); text-decoration: underline; }
 .path a { color: inherit; text-decoration: none; }
 .path a:hover { text-decoration: underline; }
-.proof { color: var(--faint); font: 500 12.5px "Geist Mono", ui-monospace, monospace; }
+.run { margin: 4px 0 14px; font-size: 14.5px; }
+.run .row { margin: 0; border-bottom: 1px solid var(--line); }
+.run div.row, .run .row > summary { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 0 8px; align-items: baseline; padding: 6px 0; }
+.run .row > summary::before { display: none; }
+.run .mark { color: var(--plus); }
+.run .fail .mark, .run .fail .what { color: var(--minus); }
+.run .note { color: var(--faint); font: 500 12.5px "Geist Mono", ui-monospace, monospace; white-space: nowrap; }
+.run details.row > summary .what::after { content: "log"; margin-left: 10px; font: 500 11px "Geist Mono", ui-monospace, monospace; color: var(--faint); }
+.log { margin: 0 0 10px 30px; padding: 10px 12px; background: var(--pane); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.5; overflow: auto; max-height: 320px; white-space: pre; }
+.shown { margin: 6px 0 10px; }
+.proof { color: var(--faint); font: 500 11.5px "Geist Mono", ui-monospace, monospace; margin-right: 12px; white-space: nowrap; }
 .order li { margin-bottom: 8px; }
+.order.items { list-style: none; padding-left: 0; margin-top: 18px; }
 .order .muted { display: block; }
 .chip { font: 500 12px "Geist Mono", ui-monospace, monospace; color: var(--c); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; text-decoration: none; }
 .blocker { --c: var(--blocker); } .fix { --c: var(--fix); } .suggestion { --c: var(--suggestion); }
@@ -120,7 +131,10 @@ a.at:hover { color: var(--text); text-decoration: underline; }
 details { margin: 6px 0 10px; }
 summary { cursor: pointer; }
 summary:hover { color: var(--text); }
-details:not([open]) > summary::after { content: "  space"; font: 500 11px "Geist Mono", ui-monospace, monospace; color: var(--faint); background: var(--key); border-radius: 5px; padding: 1px 6px; margin-left: 8px; }
+summary { list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ""; display: inline-block; width: 0; height: 0; border-style: solid; border-width: 3.5px 0 3.5px 5px; border-color: transparent transparent transparent var(--faint); margin: 0 8px 1px 2px; transition: transform 0.12s; }
+details[open] > summary::before { transform: rotate(90deg); }
 .trace { background: var(--pane); border-radius: 8px; padding: 10px 12px 2px; margin-top: 8px; font-size: 14px; }
 figure { margin: 0; }
 .diagram { border: 1px solid var(--line); border-radius: 12px; padding: 14px; overflow: hidden; text-align: center; background: var(--bg); }
@@ -178,6 +192,8 @@ body.pinned .frame { display: flex; flex: 1; min-height: 0; }
 .rail a.sub.on { border-left-color: var(--text); }
 .rail a.on .id { color: var(--text); }
 .rail .short { display: none; font: 500 12px "Geist Mono", ui-monospace, monospace; }
+.rail .short svg { display: block; width: 15px; height: 15px; margin: auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.rail .short.failed { color: var(--blocker); }
 body.narrow .frame > .rail { flex-basis: 54px; padding: 14px 6px 28px; overflow-x: hidden; }
 body.narrow .frame > .rail a, body.narrow .frame > .rail a.sub { display: block; padding: 6px 0; text-align: center; margin: 0; border-left: 0; }
 body.narrow .frame > .rail a.part { margin-top: 8px; }
@@ -513,12 +529,14 @@ ${media ? `<div class="aside">${media}</div>` : ''}
 const itemStep = (item) => {
     const evidence = item.evidence ?? [];
     const media = evidence.filter((one) => one.path).map((one) => figure(one.path, one.caption));
-    const traces = evidence
-        .filter((one) => !one.path)
-        .map(
-            (one) =>
-                `<details><summary><span class="proof">${escape(proof[one.provenance] ?? one.provenance ?? '')}</span> ${inline(one.caption ?? 'Trace')}</summary><div class="trace">${prose(one.text)}</div></details>`,
-        );
+    // Every entry is listed with how it was established and what it shows; one with text opens to show it, and a
+    // picture or recording is the figure with the card.
+    const traces = evidence.map((one) => {
+        const line = `<span class="proof">${escape(proof[one.provenance] ?? one.provenance ?? '')}</span>${inline(one.caption ?? (one.path ? 'Figure' : 'Trace'))}`;
+        return one.text
+            ? `<details><summary>${line}</summary><div class="trace">${prose(one.text)}</div></details>`
+            : `<p class="shown">${line}</p>`;
+    });
     return step({
         id: item.id,
         name: `${label(item)} ${item.id}`,
@@ -529,7 +547,7 @@ const itemStep = (item) => {
 ${item.at ? onHost(item.at.file, item.at.line, `${escape(item.at.file)}:${escape(item.at.line)}`, 'at') : ''}
 ${item.plain ? `<p class="plain">${inline(item.plain)}</p>` : ''}
 ${prose(item.body)}
-${evidence.length ? `<h4>Evidence (${evidence.length})</h4>${traces.join('')}${media.length ? `<p class="muted">${media.length} shown beside this step. Press <kbd>m</kbd> to open it large.</p>` : ''}` : ''}`,
+${evidence.length ? `<h4>Evidence (${evidence.length})</h4>${traces.join('')}` : ''}`,
         media: media.join(''),
     });
 };
@@ -542,6 +560,39 @@ const tally = [
     [count('good'), 'good calls'],
     [Object.keys(patch).length, 'files'],
 ];
+// What the sandbox run did, when the bundle carries its record (verify.json): each
+// step it took, whether it passed and how long it ran, then each check made against the running app.
+const verify = data.verify ?? null;
+const verified = verify && (verify.steps ?? []).every((one) => one.ok);
+// A step or check opens to show its proof when there is one: the end of the step's log (<step>.log beside
+// verify.json) or the check's own detail, such as the response it got.
+const tail = (name) => (verify.steps ?? []).find((one) => one.step === name)?.log ?? '';
+const runRow = (ok, name, note, proof) => {
+    const line = `<span class="mark">${ok ? '✓' : '✕'}</span><span class="what">${name}</span><span class="note">${note}</span>`;
+    return proof
+        ? `<details class="row ${ok ? 'pass' : 'fail'}"${ok ? '' : ' open'}><summary>${line}</summary><pre class="log">${escape(proof)}</pre></details>`
+        : `<div class="row ${ok ? 'pass' : 'fail'}">${line}</div>`;
+};
+const verifyStep = verify
+    ? step({
+          id: 'verification',
+          name: 'verification',
+          text: `<div class="kind"><b>Verification</b> · ${verified ? 'confirmed by a run' : 'the run did not finish clean'}</div>
+<h2>Sandbox verification</h2>
+<p class="plain">The change was started in a throwaway copy of the stack inside the pipeline job, and these are the steps and checks that ran against it.</p>
+<h4>Steps</h4>
+<div class="run">${(verify.steps ?? []).map((one) => runRow(one.ok, escape(one.step), `${escape(one.seconds)} s`, tail(one.step) || 'This step printed nothing.')).join('')}</div>
+<h4>Checks</h4>
+<div class="run">${(verify.checks ?? [])
+              .map((one) => {
+                  const ok = one.ok ?? String(one.status) === '200';
+                  return runRow(ok, inline(one.name), escape(one.status ?? ''), one.detail ?? '');
+              })
+              .join('')}</div>
+${verify.api ? `<p class="muted">API under test: <code>${escape(verify.api)}</code></p>` : ''}`,
+          media: (verify.media ?? []).map((one) => figure(one.path, one.caption)).join(''),
+      })
+    : '';
 const steps = [
     step({
         id: 'summary',
@@ -560,6 +611,7 @@ ${review.map ? `<h4>Where it sits</h4>${figure(review.map.path, review.map.capti
             )
             .join('')}</ol>`,
     }),
+    verifyStep,
     ...sections.flatMap((section, index) => [
         step({
             id: `part-${index + 1}`,
@@ -570,7 +622,7 @@ ${review.map ? `<h4>Where it sits</h4>${figure(review.map.path, review.map.capti
 ${prose(section.why)}
 ${
     inPart(index).length
-        ? `<h4>In this part</h4><ul class="order">${inPart(index)
+        ? `<ul class="order items">${inPart(index)
               .map((item) => `<li>${chip(item)} <a href="#${escape(item.id)}">${inline(item.title)}</a></li>`)
               .join('')}</ul>`
         : '<p class="muted">Nothing to raise in this part.</p>'
@@ -588,6 +640,7 @@ ${row('Merge request', `${escape(source.repo ?? '')} ${escape(source.reference ?
 ${row('Head', `<code>${escape((source.head_sha ?? '').slice(0, 8))}</code> ${escape(source.branch ?? '')} → ${escape(source.target ?? '')}`)}
 ${row('Change', `${Object.keys(patch).length} files · +${added} −${removed}`)}
 ${row('Guide', `${sections.length} parts · ${items.length} items`)}
+${verify ? row('Sandbox', `${(verify.steps ?? []).filter((one) => one.ok).length} of ${(verify.steps ?? []).length} steps passed · ${(verify.steps ?? []).reduce((sum, one) => sum + one.seconds, 0)} s`) : ''}
 ${row(
     'Items',
     ['blocker', 'fix', 'suggestion', 'question', 'decision', 'good']
@@ -615,6 +668,9 @@ const railItem = (item) =>
     `<a href="#${escape(item.id)}" class="sub ${escape(label(item))}" title="${escape(label(item))} ${escape(item.id)}"><span class="id">${escape(item.id)}</span><span class="name">${inline(item.title)}</span><span class="short">${escape(item.id)}</span></a>`;
 const rail = [
     `<a href="#summary" class="part"><span class="name">Summary</span><span class="short">≡</span></a>`,
+    verify
+        ? `<a href="#verification" class="part"><span class="name">Sandbox verification</span><span class="short${verified ? '' : ' failed'}"><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3M7.5 15h9"/></svg></span></a>`
+        : '',
     ...sections.flatMap((section, index) => [
         `<a href="#part-${index + 1}" class="part" title="${escape(section.title)}"><span class="over">${index + 1}${section.tier ? ` · ${escape(section.tier)}` : ''}</span><span class="name">${inline(section.title)}</span><span class="short">${index + 1}</span></a>`,
         ...inPart(index).map(railItem),
@@ -631,14 +687,14 @@ document.body.insertAdjacentHTML('beforeend', `<header class="head">
     <div class="title"><a class="ref" href="${escape(source.url ?? '#')}">${escape((source.repo ?? '').split('/').pop())} ${escape(source.reference ?? '')}</a>${inline(review.title)}<span class="plus">+${added}</span> <span class="minus">−${removed}</span></div>
     <div class="meta">${Object.keys(patch).length} files · head ${escape((source.head_sha ?? '').slice(0, 8))} · ${escape(source.branch ?? '')} → ${escape(source.target ?? '')}${source.author ? ` · ${escape(source.author)}` : ''}</div>
   </div>
-  <button type="button" class="icon" data-stats aria-label="Stats for this review"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg></button>
-  <button type="button" class="icon theme" aria-label="Switch between light and dark"><svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+  <button type="button" class="icon" data-stats aria-label="Stats for this review" title="Stats (S)"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg></button>
+  <button type="button" class="icon theme" aria-label="Switch between light and dark" title="Light or dark"><svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
 </header>
 <div class="where">
-  <button type="button" class="icon" data-go="rail" aria-label="Collapse or open the contents column"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button>
-  <button type="button" class="icon" data-go="back" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
-  <button type="button" class="icon" data-go="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
-  <button type="button" class="now" data-go="contents" aria-label="Contents"></button>
+  <button type="button" class="icon" data-go="rail" aria-label="Collapse or open the contents column" title="Collapse or open contents (B)"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button>
+  <button type="button" class="icon" data-go="back" aria-label="Back" title="Previous card (←)"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+  <button type="button" class="icon" data-go="next" aria-label="Next" title="Next card (→)"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+  <button type="button" class="now" data-go="contents" aria-label="Contents" title="Contents (b)"></button>
 </div>
 <div class="frame">
 <nav class="rail" aria-label="Contents">${rail}</nav>
@@ -654,16 +710,17 @@ ${sections.map((section, index) => `<div class="partdiff" data-part="${index}">$
 </main>
 </div>
 <footer class="keys">
-  <span><kbd>l</kbd> next</span><span><kbd>h</kbd> back</span><span><kbd>j</kbd><kbd>k</kbd> scroll</span><span><kbd>b</kbd> contents</span><span><kbd>tab</kbd> pane</span><span><kbd>z</kbd> zoom</span><span data-help><kbd>?</kbd> help</span>
+  <span><kbd>→</kbd> next</span><span><kbd>←</kbd> back</span><span><kbd>h</kbd><kbd>l</kbd> column</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>b</kbd> contents</span><span><kbd>z</kbd> zoom</span><span data-help><kbd>?</kbd> help</span>
 </footer>
 <div class="contents"><nav class="rail" aria-label="Contents">${rail}</nav></div>
 <div class="help stats"><div class="sheet">${stats}</div></div>
 <div class="help keysheet"><div class="sheet">
   <h4>Moving</h4>
   <dl>
-    <dt><kbd>l</kbd> <kbd>→</kbd></dt><dd>Next card: the summary, each part, each finding</dd>
-    <dt><kbd>h</kbd> <kbd>←</kbd></dt><dd>Previous card</dd>
-    <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Scroll the card; in the contents column, move between cards; in the diff, move one line</dd>
+    <dt><kbd>→</kbd></dt><dd>Next card: the summary, each part, each finding</dd>
+    <dt><kbd>←</kbd></dt><dd>Previous card</dd>
+    <dt><kbd>l</kbd> <kbd>h</kbd></dt><dd>Move focus to the next or previous column, as tab and shift-tab do</dd>
+    <dt><kbd>j</kbd> <kbd>k</kbd> <kbd>↓</kbd> <kbd>↑</kbd></dt><dd>Scroll the card; in the contents column, move between cards; in the diff, move one line</dd>
     <dt><kbd>u</kbd> <kbd>U</kbd></dt><dd>Page down, page up in the focused pane</dd>
     <dt><kbd>tab</kbd></dt><dd>Move focus to the next column: contents, card, diff</dd>
     <dt><kbd>b</kbd></dt><dd>Contents: list every card and jump to one</dd>
@@ -1009,8 +1066,8 @@ document.addEventListener('keydown', (event) => {
     }
     const pane = point();
     const line = 66;
-    if (key === 'l' || key === 'ArrowRight') go(now + 1);
-    else if (key === 'h' || key === 'ArrowLeft') go(now - 1);
+    if (key === 'ArrowRight') go(now + 1);
+    else if (key === 'ArrowLeft') go(now - 1);
     else if (pane.classList.contains('partdiff') && (key === 'j' || key === 'ArrowDown')) select(cursor + 1);
     else if (pane.classList.contains('partdiff') && (key === 'k' || key === 'ArrowUp')) select(cursor - 1);
     else if (pane.classList.contains('partdiff') && (key === 'u' || key === 'PageDown')) select(cursor + 20);
@@ -1022,7 +1079,7 @@ document.addEventListener('keydown', (event) => {
     else if (key === 'k' || key === 'ArrowUp') pane.scrollBy({ top: -line });
     else if (key === 'u' || key === 'PageDown') pane.scrollBy({ top: pane.clientHeight * 0.85 });
     else if (key === 'U' || key === 'PageUp') pane.scrollBy({ top: -pane.clientHeight * 0.85 });
-    else if (key === 'Tab') { focus = (focus + (event.shiftKey ? panes().length - 1 : 1)) % panes().length; point(); }
+    else if (key === 'Tab' || key === 'l' || key === 'h') { focus = (focus + (key === 'h' || (key === 'Tab' && event.shiftKey) ? panes().length - 1 : 1)) % panes().length; point(); }
     else if (key === 'b') { contents.classList.toggle('open'); choose(now); }
     else if (key === 'B') fold();
     else if (key === 'd') { layout = layouts[layout] === 'off' ? 0 : 2; turn(0); }

@@ -272,6 +272,7 @@ pub fn json(bundle: &Bundle) -> String {
     let outgoing = points(bundle, &state).len();
     serde_json::json!({
         "system": system(bundle),
+        "verify": crate::html::verify(&bundle.dir),
         "dir": bundle.dir,
         "review": review,
         "files": bundle.files,

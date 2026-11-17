@@ -6,6 +6,7 @@ A bundle is one directory that `revui <dir>` opens:
     mr.patch      the raw diff, one per source. Never written by a model.
     assets/       evidence files (screenshots, recordings, logs)
     state.json    the reviewer's verdicts and comments. Never written by a generator.
+    verify.json   optional: what a sandbox run of the change did. Written by a pipeline, never by a model.
 
 `revui fetch <merge request or pull request URL>` creates the directory with `mr.patch` and a
 `review.json` that has no sections, and prints its path. Running it again for the
@@ -149,6 +150,21 @@ with the `o` key. `revui diagram <file.mmd> <out.png>` renders Mermaid to an ima
 Chrome. An entry can carry both a `path` and `text`.
 `text` is shown inline as is, and the viewer wraps it. Keep whole lines: shorten output by choosing lines (`grep`, `head`), never by cutting characters (`cut -c`), which leaves lines that end mid-word. Short command output can go in `text` with no `path`,
 whatever the provenance.
+
+## A sandbox run
+
+A pipeline that starts the change in a throwaway copy of the stack can leave what happened
+as `verify.json`, and the viewers show it as a card after the summary:
+
+    {
+      "steps":  [{ "step": "seed", "ok": true, "seconds": 38 }],
+      "checks": [{ "name": "GET /agents as the seeded admin", "status": "200", "detail": "HTTP/1.1 200 OK" }],
+      "api": "http://localhost:4566/...",
+      "media": [{ "path": "assets/run.png", "caption": "The agents list after seeding" }]
+    }
+
+Each step's proof is the end of its log, `<step>.log` beside `verify.json`. A check's proof
+is its `detail`; it passed when `ok` says so, or when `status` is `200`. Only `steps` is needed.
 
 ## A merge request that moved on
 

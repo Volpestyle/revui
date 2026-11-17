@@ -148,7 +148,8 @@ figcaption { margin-top: 8px; text-align: center; }
 .partdiff.on { display: block; }
 .path { font: 600 12.5px "Geist Mono", ui-monospace, monospace; padding: 6px 18px; background: var(--pane); border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); position: sticky; top: 0; overflow-wrap: anywhere; }
 .diff { margin: 0; font-size: 12.5px; line-height: 1.55; }
-.line { display: block; padding-right: 18px; white-space: pre; min-width: max-content; }
+.line { display: block; padding: 0 18px 0 72px; text-indent: -72px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.line i, .line b { text-indent: 0; }
 .diff .k { color: var(--k); } .diff .s { color: var(--s); } .diff .n { color: var(--n); } .diff .c { color: var(--c); font-style: italic; }
 .diff .f { color: var(--f); } .diff .t { color: var(--t); } .diff .p { color: var(--p); } .diff .g { color: var(--g); }
 .line b { display: inline-block; width: 20px; font-weight: 400; color: var(--faint); user-select: none; }
@@ -701,7 +702,7 @@ ${
         ? `<h4>The run</h4>
 <dl>
 ${row('Model', `<code>${escape(metric[0].model)}</code>${metric[0].effort ? ` · ${escape(metric[0].effort)} effort` : ''}`)}
-${row('Linear', metric[0].linear === 'none' ? 'not read' : 'read-only')}
+${row('Tickets', (metric[0].tickets ?? metric[0].linear) === 'none' ? 'not read' : 'read-only')}
 ${metric.map((pass) => row(pass.pass === 'guide' ? 'Review pass' : 'Repair pass', `${pass.seconds} s · ${pass.turns} turns · $${pass.cost_usd.toFixed(2)}`)).join('\n')}
 ${row('Total', `${metric.reduce((sum, pass) => sum + pass.seconds, 0)} s · $${metric.reduce((sum, pass) => sum + pass.cost_usd, 0).toFixed(2)}`)}
 </dl>`

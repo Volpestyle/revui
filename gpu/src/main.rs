@@ -225,8 +225,8 @@ fn paint(path: &str, lines: &[String]) -> Painted {
         .map(|line| {
             let code = format!("{}\n", line.get(1..).unwrap_or(""));
             match state.highlight_line(&code, syntaxes) {
-                Ok(spans) => spans.into_iter().map(|(style, text)| (Color32::from_rgb(style.foreground.r, style.foreground.g, style.foreground.b), text.trim_end_matches('\n').to_string())).collect(),
-                Err(_) => plain(code.trim_end_matches('\n')),
+                Ok(spans) => spans.into_iter().map(|(style, text)| (Color32::from_rgb(style.foreground.r, style.foreground.g, style.foreground.b), text.trim_end_matches('\n').replace('\t', "    "))).collect(),
+                Err(_) => plain(&code.trim_end_matches('\n').replace('\t', "    ")),
             }
         })
         .collect()
@@ -1561,8 +1561,15 @@ impl eframe::App for App {
                 Gap,
                 File(usize),
                 Hunk(usize, usize),
-                Line { file: usize, hunk: usize, nth: usize, number: u32, sign: char, at: usize },
+                Line { file: usize, hunk: usize, nth: usize, number: u32, sign: char, at: usize, part: usize },
             }
+            // A line longer than the panel is wide goes on over as many rows as it needs, so nothing runs off the side.
+            // Every character of the code is one width, so where a line breaks is a count.
+            // ponytail: a character twice as wide (CJK) is counted as one, and such a line can still pass the edge.
+            let glyph = |size: f32| ui.painter().layout_no_wrap("0".into(), mono(size), Color32::WHITE).size().x;
+            let (gutter, letter) = (glyph(12.0) * 8.0 + glyph(12.5) * 2.0, glyph(12.5));
+            let room = ctx.data(|data| data.get_temp::<f32>(egui::Id::new("diff wide"))).unwrap_or(620.0);
+            let fits = (((room - gutter - 14.0) / letter).floor() as usize).max(24);
             let mut rows = Vec::new();
             let (mut last, mut at) = (usize::MAX, 0);
             for &(file, hunk_at) in &open.data.groups[group] {
@@ -1583,7 +1590,8 @@ impl eframe::App for App {
                         '\\' => {}
                         _ => (old, new) = (old + 1, new + 1),
                     }
-                    rows.push(Shown::Line { file, hunk: hunk_at, nth, number, sign, at });
+                    let long: usize = line.chars().skip(1).map(|letter| if letter == '\t' { 4 } else { 1 }).sum();
+                    rows.extend((0..long.div_ceil(fits).max(1)).map(|part| Shown::Line { file, hunk: hunk_at, nth, number, sign, at, part }));
                     at += (sign != '\\') as usize;
                 }
             }
@@ -1611,10 +1619,14 @@ impl eframe::App for App {
                     ui.add(egui::Label::new(RichText::new(about).font(mono(12.5)).color(if open.in_diff { ON_INK } else { Color32::from_rgb(102, 102, 110) })).truncate());
                 });
                 ui.painter().hline(ui.clip_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, Color32::from_rgb(31, 31, 35)));
-                let area = egui::ScrollArea::both().auto_shrink(false);
+                if (ui.available_width() - room).abs() > 0.5 {
+                    ui.data_mut(|data| data.insert_temp(egui::Id::new("diff wide"), ui.available_width()));
+                    ui.ctx().request_repaint();
+                }
+                let area = egui::ScrollArea::vertical().auto_shrink(false);
                 let area = match (turned, cursor.filter(|_| marked.is_some())) {
-                    (true, Some(row)) => area.vertical_scroll_offset((row as f32 * TALL - ui.available_height() / 2.0).max(0.0)).horizontal_scroll_offset(0.0),
-                    (true, None) => area.vertical_scroll_offset(0.0).horizontal_scroll_offset(0.0),
+                    (true, Some(row)) => area.vertical_scroll_offset((row as f32 * TALL - ui.available_height() / 2.0).max(0.0)),
+                    (true, None) => area.vertical_scroll_offset(0.0),
                     _ => area,
                 };
                 area.show_rows(ui, TALL, rows.len(), |ui, seen| {
@@ -1633,17 +1645,17 @@ impl eframe::App for App {
                                 ui.painter().hline(band.x_range(), band.top(), Stroke::new(1.0, Color32::from_rgb(31, 31, 35)));
                                 ui.allocate_ui_with_layout(wide, across, |ui| {
                                     ui.add_space(18.0);
-                                    ui.add(egui::Label::new(RichText::new(&open.data.files[file].path).font(mono(12.5)).color(ON_INK)).extend());
+                                    ui.add(egui::Label::new(RichText::new(&open.data.files[file].path).font(mono(12.5)).color(ON_INK)).truncate());
                                 });
                             }
                             Shown::Hunk(file, hunk) => {
                                 ui.painter().rect_filled(band, 0.0, Color32::from_rgb(19, 19, 22));
                                 ui.allocate_ui_with_layout(wide, across, |ui| {
                                     ui.add_space(58.0);
-                                    ui.add(egui::Label::new(RichText::new(&open.data.files[file].hunks[hunk].header).font(mono(12.0)).color(Color32::from_rgb(102, 102, 110))).extend());
+                                    ui.add(egui::Label::new(RichText::new(&open.data.files[file].hunks[hunk].header).font(mono(12.0)).color(Color32::from_rgb(102, 102, 110))).truncate());
                                 });
                             }
-                            Shown::Line { file, hunk, nth, number, sign, at } => {
+                            Shown::Line { file, hunk, nth, number, sign, at, part } => {
                                 let (shown, lines) = (&open.data.files[file], &open.data.files[file].hunks[hunk].lines);
                                 let painted = open.painted.entry((file, hunk)).or_insert_with(|| paint(&shown.path, lines));
                                 let (fill, ink) = match sign {
@@ -1665,16 +1677,28 @@ impl eframe::App for App {
                                 }
                                 ui.allocate_ui_with_layout(wide, across, |ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;
-                                    ui.label(RichText::new(format!("{number:>6}  ")).font(mono(12.0)).color(Color32::from_rgb(102, 102, 110)));
-                                    ui.label(RichText::new(format!("{sign} ")).font(mono(12.5)).color(match sign {
-                                        '+' => Color32::from_rgb(95, 196, 138),
-                                        '-' => Color32::from_rgb(255, 115, 105),
-                                        _ => ink,
-                                    }));
+                                    // The number and the sign stand on a line's first row; the rows it goes on over start under its code.
+                                    if part == 0 {
+                                        ui.label(RichText::new(format!("{number:>6}  ")).font(mono(12.0)).color(Color32::from_rgb(102, 102, 110)));
+                                        ui.label(RichText::new(format!("{sign} ")).font(mono(12.5)).color(match sign {
+                                            '+' => Color32::from_rgb(95, 196, 138),
+                                            '-' => Color32::from_rgb(255, 115, 105),
+                                            _ => ink,
+                                        }));
+                                    } else {
+                                        ui.add_space(gutter);
+                                    }
                                     let mut code = egui::text::LayoutJob::default();
+                                    let (from, to, mut before) = (part * fits, (part + 1) * fits, 0);
                                     for (color, text) in &painted[nth] {
-                                        let color = if sign == '-' { color.gamma_multiply(0.6) } else if sign == '+' { *color } else { color.gamma_multiply(0.75) };
-                                        code.append(text, 0.0, egui::TextFormat { font_id: mono(12.5), color, ..Default::default() });
+                                        let count = text.chars().count();
+                                        let (first, end) = (from.max(before), to.min(before + count));
+                                        if first < end {
+                                            let color = if sign == '-' { color.gamma_multiply(0.6) } else if sign == '+' { *color } else { color.gamma_multiply(0.75) };
+                                            let piece: String = text.chars().skip(first - before).take(end - first).collect();
+                                            code.append(&piece, 0.0, egui::TextFormat { font_id: mono(12.5), color, ..Default::default() });
+                                        }
+                                        before += count;
                                     }
                                     ui.add(egui::Label::new(code).extend());
                                 });

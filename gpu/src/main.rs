@@ -195,6 +195,7 @@ struct Tones {
     accent: Color32,
     on_accent: Color32,
     rust: Color32,
+    link: Color32,
 }
 
 const INK: Color32 = Color32::from_rgb(11, 11, 11);
@@ -205,8 +206,8 @@ const REMOVED: Color32 = Color32::from_rgb(58, 22, 26);
 fn tones(dark: bool) -> Tones {
     let rgb = Color32::from_rgb;
     match dark {
-        true => Tones { bg: rgb(22, 22, 20), raised: rgb(31, 31, 28), line: rgb(58, 58, 53), dim: rgb(156, 156, 146), text: rgb(205, 204, 196), strong: rgb(241, 240, 234), accent: rgb(241, 240, 234), on_accent: INK, rust: rgb(196, 122, 90) },
-        false => Tones { bg: rgb(246, 245, 240), raised: Color32::WHITE, line: rgb(214, 212, 202), dim: rgb(108, 109, 101), text: rgb(58, 59, 54), strong: rgb(22, 22, 20), accent: INK, on_accent: Color32::WHITE, rust: rgb(111, 63, 43) },
+        true => Tones { bg: rgb(22, 22, 20), raised: rgb(31, 31, 28), line: rgb(58, 58, 53), dim: rgb(156, 156, 146), text: rgb(205, 204, 196), strong: rgb(241, 240, 234), accent: rgb(241, 240, 234), on_accent: INK, rust: rgb(196, 122, 90), link: rgb(169, 172, 247) },
+        false => Tones { bg: rgb(246, 245, 240), raised: Color32::WHITE, line: rgb(214, 212, 202), dim: rgb(108, 109, 101), text: rgb(58, 59, 54), strong: rgb(22, 22, 20), accent: INK, on_accent: Color32::WHITE, rust: rgb(111, 63, 43), link: rgb(52, 71, 170) },
     }
 }
 
@@ -475,13 +476,13 @@ struct App {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut fonts = egui::FontDefinitions::default();
-        for (name, bytes) in [("geist", include_bytes!("../fonts/Geist-Regular.ttf").as_slice()), ("geist-bold", include_bytes!("../fonts/Geist-SemiBold.ttf")), ("geist-mono", include_bytes!("../fonts/GeistMono-Regular.ttf")), ("geist-serif", include_bytes!("../fonts/GeistSerif-Regular.ttf"))] {
+        for (name, bytes) in [("sans", include_bytes!("../fonts/DMSans-Regular.ttf").as_slice()), ("sans-medium", include_bytes!("../fonts/DMSans-Medium.ttf")), ("sans-bold", include_bytes!("../fonts/DMSans-SemiBold.ttf")), ("geist-mono", include_bytes!("../fonts/GeistMono-Regular.ttf"))] {
             fonts.font_data.insert(name.into(), std::sync::Arc::new(egui::FontData::from_static(bytes)));
         }
-        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "geist".into());
+        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "sans".into());
         fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "geist-mono".into());
-        fonts.families.insert(FontFamily::Name("bold".into()), vec!["geist-bold".into(), "geist".into()]);
-        fonts.families.insert(FontFamily::Name("serif".into()), vec!["geist-serif".into(), "geist".into()]);
+        fonts.families.insert(FontFamily::Name("bold".into()), vec!["sans-bold".into(), "sans".into()]);
+        fonts.families.insert(FontFamily::Name("medium".into()), vec!["sans-medium".into(), "sans".into()]);
         fonts.font_data.insert("lucide".into(), std::sync::Arc::new(egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES)));
         fonts.families.values_mut().for_each(|family| family.push("lucide".into()));
         egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -517,8 +518,27 @@ fn bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("bold".into()))
 }
 
-fn serif(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("serif".into()))
+/// The medium weight headings are set in.
+fn display(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("medium".into()))
+}
+
+/// How tall a line of text of this size is: reading text gets more air than the small text of a panel.
+fn leading(size: f32) -> f32 {
+    (size * if size >= 16.0 { 1.8 } else { 1.6 }).round()
+}
+
+/// The heading of a card.
+fn title(ui: &mut egui::Ui, tones: &Tones, text: impl AsRef<str>) {
+    ui.label(RichText::new(text.as_ref()).font(display(28.0)).line_height(Some(39.0)).color(tones.strong));
+    ui.add_space(4.0);
+}
+
+/// The heading of a part of a card.
+fn head(ui: &mut egui::Ui, tones: &Tones, text: impl AsRef<str>) {
+    ui.add_space(16.0);
+    ui.label(RichText::new(text.as_ref()).font(display(20.0)).line_height(Some(30.0)).color(tones.strong));
+    ui.add_space(10.0);
 }
 
 /// A picture from the bundle shown in place; anything else it holds (a recording, a file) as a link. Either opens in the machine's own viewer or player.
@@ -557,7 +577,7 @@ fn mono(size: f32) -> FontId {
 /// One run of prose as laid-out text: file paths, routes, calls and constants are set in mono on a tint, the way backticks would, and `**this**` in bold.
 fn inline(tones: &Tones, text: &str, size: f32) -> egui::text::LayoutJob {
     static CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\*\*[^*\n]+\*\*|`[^`]+`|[\w.-]+/[\w./-]*\.\w+(?::\d+)?|\B/[a-z][\w/:-]+|\b\w[\w-]+\.[a-z]{2,4}(?::\d+)?\b|\b[A-Za-z_][\w.]*\([^()\s]*\)|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[a-z]+_[a-z_]+\b").expect("a fixed pattern"));
-    let plain = egui::TextFormat { font_id: FontId::proportional(size), color: tones.text, line_height: Some((size * 1.53).round()), ..Default::default() };
+    let plain = egui::TextFormat { font_id: FontId::proportional(size), color: tones.text, line_height: Some(leading(size)), ..Default::default() };
     let code = egui::TextFormat { font_id: mono(size - 2.0), color: tones.strong, background: tones.raised, ..plain.clone() };
     let strong = egui::TextFormat { font_id: bold(size), color: tones.strong, ..plain.clone() };
     let mut job = egui::text::LayoutJob::default();
@@ -584,7 +604,7 @@ fn line(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) 
             let Some(url) = links.of(found.as_str()) else { continue };
             ui.label(inline(tones, &text[from..found.start()], size));
             let mut job = inline(tones, "", size);
-            job.append(found.as_str(), 0.0, egui::TextFormat { font_id: FontId::proportional(size), color: tones.accent, line_height: Some((size * 1.53).round()), underline: Stroke::new(1.0, tones.accent.gamma_multiply(0.5)), ..Default::default() });
+            job.append(found.as_str(), 0.0, egui::TextFormat { font_id: FontId::proportional(size), color: tones.link, line_height: Some(leading(size)), ..Default::default() });
             if ui.add(egui::Label::new(job).sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&url).clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(url));
             }
@@ -595,33 +615,39 @@ fn line(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) 
 }
 
 fn prose(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
-    prose_at(ui, tones, links, text, 15.0);
+    prose_at(ui, tones, links, text, 16.0);
 }
 
 fn prose_at(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) {
+    let roomy = size >= 16.0;
     ui.scope(|ui| {
-        ui.set_max_width(680.0_f32.min(ui.available_width()));
-        for block in text.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") })) {
+        ui.set_max_width(800.0_f32.min(ui.available_width()));
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let blocks = text.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") }));
+        for (n, block) in blocks.enumerate() {
             let mut lines = block.lines().peekable();
             if let Some(heading) = lines.peek().and_then(|line| line.strip_prefix("# ")) {
-                ui.add_space(12.0);
-                ui.label(RichText::new(heading).font(bold(size)).color(tones.strong));
-                ui.add_space(2.0);
+                ui.add_space(if n == 0 { 0.0 } else if roomy { 16.0 } else { 6.0 });
+                ui.label(RichText::new(heading).font(display(if roomy { 20.0 } else { size + 1.5 })).line_height(Some(if roomy { 30.0 } else { leading(size) })).color(tones.strong));
+                ui.add_space(if roomy { 12.0 } else { 4.0 });
                 lines.next();
             }
+            let mut after = 0.0;
             for line in lines.filter(|line| !line.trim().is_empty()) {
                 let (mark, rest) = line.trim_start().split_once(' ').unwrap_or(("", line));
                 let listed = mark == "-" || mark == "*" || mark.strip_suffix('.').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+                ui.add_space(after);
                 if listed {
                     ui.horizontal_top(|ui| {
-                        ui.add_sized([22.0, (size * 1.53).round()], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).font(mono(size - 2.0)).color(tones.dim)));
+                        ui.add_sized([if roomy { 24.0 } else { 18.0 }, leading(size)], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).size(size).color(tones.text)));
                         self::line(ui, tones, links, rest, size);
                     });
                 } else {
                     self::line(ui, tones, links, line, size);
                 }
+                after = if listed { if roomy { 8.0 } else { 4.0 } } else { 0.0 };
             }
-            ui.add_space(8.0);
+            ui.add_space(if roomy { 24.0 } else { 10.0 });
         }
     });
 }
@@ -888,10 +914,11 @@ impl eframe::App for App {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.horizontal(|ui| {
                             let _ = logo(ui, 26.0);
-                            ui.label(RichText::new("revui").font(serif(24.0)).color(tones.strong));
+                            ui.label(RichText::new("revui").font(display(24.0)).color(tones.strong));
                         });
                         ui.add_space(14.0);
-                        ui.label(RichText::new("Merge request or pull request link").font(bold(13.0)).color(tones.strong));
+                        ui.label(RichText::new("Merge request or pull request link").font(display(14.0)).color(tones.strong));
+                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             let field = ui.add(egui::TextEdit::singleline(&mut self.link).desired_width(560.0).margin(egui::Margin::symmetric(10, 8)).hint_text("https://gitlab.com/group/project/-/merge_requests/123"));
                             let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
@@ -916,10 +943,10 @@ impl eframe::App for App {
                                 let (fill, ink, faint) = if n == self.row { (tones.accent, tones.on_accent, tones.on_accent.gamma_multiply(0.7)) } else { (tones.raised, tones.strong, tones.dim) };
                                 let state = if !past.working.trim().is_empty() { past.working.clone() } else if past.done.is_some() { "published".into() } else if past.items > 0 { format!("{} of {} marked", past.marked, past.items) } else { "no guide yet".into() };
                                 let about = [format!("{}{}", past.repo.rsplit('/').next().unwrap_or(""), past.reference), past.author.clone(), state, past.when.clone()].join(" · ");
-                                let row = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, tones.line)).inner_margin(10.0).show(ui, |ui| {
+                                let row = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, tones.line)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
                                     ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(if past.title.is_empty() { &past.dir } else { &past.title }).size(14.5).color(ink));
-                                    ui.label(RichText::new(about).size(12.0).color(faint));
+                                    ui.label(RichText::new(if past.title.is_empty() { &past.dir } else { &past.title }).size(16.0).line_height(Some(24.0)).color(ink));
+                                    ui.label(RichText::new(about).size(13.0).line_height(Some(20.0)).color(faint));
                                 });
                                 if n == self.row && moved {
                                     row.response.scroll_to_me(None);
@@ -1035,6 +1062,7 @@ impl eframe::App for App {
         let mut home = false;
         let (mut mapping, mut rooting, mut rootless) = (false, false, false);
         let mut turn = 0;
+        let mut jump: Option<usize> = None;
         let mut opening: Option<String> = None;
         if let Card::Item(n) = open.cards[open.at] {
             let id = open.data.review.items[n].id.clone();
@@ -1049,7 +1077,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.set_min_height(34.0);
                 home = logo(ui, 20.0).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Your reviews (q)").clicked();
-                ui.label(RichText::new(&open.data.review.title).font(serif(16.0)).color(tones.strong));
+                ui.label(RichText::new(&open.data.review.title).font(display(16.0)).color(tones.strong));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let count = if open.data.outgoing > 0 { open.data.outgoing.to_string() } else { String::new() };
                     if button(ui, &tones, &icon(Icon::Send, &count), true).on_hover_text("Publish (p)").clicked() {
@@ -1215,6 +1243,49 @@ impl eframe::App for App {
         }
 
         egui::CentralPanel::default().frame(frame.inner_margin(egui::Margin::symmetric(30, 26))).show_inside(ui, |ui| {
+            // The card is a column 800 wide. With room beside it, the contents stand in a rail to its left, and the two are centred together.
+            const COLUMN: f32 = 800.0;
+            const RAIL: f32 = 250.0;
+            const GAP: f32 = 60.0;
+            let panel = ui.available_rect_before_wrap();
+            let railed = panel.width() >= COLUMN + RAIL + GAP;
+            let inset = ((panel.width() - COLUMN - if railed { RAIL + GAP } else { 0.0 }) / 2.0).max(0.0) + if railed { RAIL + GAP } else { 0.0 };
+            if railed {
+                let beside = egui::Rect::from_min_max(egui::pos2(panel.left() + inset - GAP - RAIL, panel.top()), egui::pos2(panel.left() + inset - GAP, panel.bottom()));
+                let mut rail = ui.new_child(egui::UiBuilder::new().max_rect(beside).layout(egui::Layout::top_down(egui::Align::Min)));
+                let seen = egui::Id::new("rail shows");
+                let turned = rail.data(|data| data.get_temp::<usize>(seen)) != Some(open.at);
+                rail.data_mut(|data| data.insert_temp(seen, open.at));
+                egui::ScrollArea::vertical().id_salt("rail").auto_shrink(false).show(&mut rail, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    for (n, card) in open.cards.iter().enumerate() {
+                        let (nested, on) = (matches!(card, Card::Item(_) | Card::Thread(_) | Card::Note(_)), n == open.at);
+                        let text = RichText::new(open.label(*card)).font(if on { display(14.0) } else { FontId::proportional(14.0) }).line_height(Some(21.0)).color(if on { tones.strong } else { tones.dim });
+                        let fill = if on { tones.strong.gamma_multiply(0.07) } else { Color32::TRANSPARENT };
+                        let row = egui::Frame::new().fill(fill).corner_radius(12.0).inner_margin(egui::Margin { left: if nested { 28 } else { 12 }, right: 12, top: 8, bottom: 8 }).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(egui::Label::new(text).selectable(false));
+                        });
+                        if let Card::Item(item) = card {
+                            let mark = match open.verdict(&open.data.review.items[*item].id) {
+                                Some("dismiss") => Some(tones.rust),
+                                Some(_) => Some(tones.strong),
+                                None => None,
+                            };
+                            if let Some(mark) = mark {
+                                ui.painter().rect_filled(egui::Rect::from_center_size(egui::pos2(row.response.rect.left() + 15.0, row.response.rect.top() + 18.0), egui::vec2(6.0, 6.0)), 0.0, mark);
+                            }
+                        }
+                        let hit = row.response.interact(egui::Sense::click());
+                        if on && turned {
+                            hit.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if fx::touch(ui, hit, tones.strong).clicked() {
+                            jump = Some(n);
+                        }
+                    }
+                });
+            }
             let area = egui::ScrollArea::vertical().auto_shrink(false);
             let area = match glide.1 {
                 Some(bottom) => area.vertical_scroll_offset(if bottom { f32::MAX } else { 0.0 }),
@@ -1223,8 +1294,8 @@ impl eframe::App for App {
             area.show(ui, |ui| {
                 ui.scroll_with_delta(egui::vec2(0.0, -glide.0));
                 let mut column = ui.available_rect_before_wrap();
-                column.min.x += ((column.width() - 760.0) / 2.0).max(0.0);
-                column.max.x = column.max.x.min(column.min.x + 760.0);
+                column.min.x += inset;
+                column.max.x = column.max.x.min(column.min.x + COLUMN);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
                     let arrived = fx::arrive(ui.ctx(), open.at);
                     ui.set_opacity(arrived);
@@ -1232,30 +1303,29 @@ impl eframe::App for App {
                     match open.cards[open.at] {
                         Card::Summary => {
                             let review = &open.data.review;
-                            let slab = egui::Frame::new().fill(INK).inner_margin(egui::Margin::symmetric(30, 24)).show(ui, |ui| {
+                            let slab = egui::Frame::new().fill(INK).inner_margin(egui::Margin::symmetric(32, 28)).show(ui, |ui| {
                                 let under = ui.painter().add(egui::Shape::Noop);
                                 ui.set_width(ui.available_width());
-                                ui.label(RichText::new(&review.title).font(serif(25.0)).color(Color32::WHITE));
-                                ui.add_space(14.0);
+                                ui.label(RichText::new(&review.title).font(display(28.0)).line_height(Some(39.0)).color(Color32::WHITE));
+                                ui.add_space(20.0);
                                 let lines = |sign: char| open.data.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
                                 let stats = [(review.sections.len().to_string(), "parts"), (review.items.iter().filter(|item| item.kind == "finding").count().to_string(), "findings"), (review.items.iter().filter(|item| item.kind == "decision").count().to_string(), "decisions"), (open.data.files.len().to_string(), "files"), (format!("+{} −{}", lines('+'), lines('-')), "lines")];
                                 ui.columns(stats.len(), |columns| {
                                     for (column, (value, name)) in columns.iter_mut().zip(&stats) {
-                                        column.add(egui::Label::new(RichText::new(value).font(serif(26.0)).color(Color32::WHITE)).extend());
-                                        column.label(RichText::new(*name).size(12.5).color(ON_INK.gamma_multiply(0.6)));
+                                        column.add(egui::Label::new(RichText::new(value).font(display(28.0)).color(Color32::WHITE)).extend());
+                                        column.label(RichText::new(*name).size(14.0).color(ON_INK.gamma_multiply(0.6)));
                                     }
                                 });
                                 under
                             });
                             fx::flow(ui, slab.inner, slab.response.rect, Color32::from_rgb(154, 158, 242));
-                            ui.add_space(18.0);
+                            ui.add_space(32.0);
                             if open.data.product && !review.plain.trim().is_empty() {
                                 prose(ui, &tones, &links, &review.plain);
-                                ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
+                                head(ui, &tones, "In detail");
                             }
                             prose(ui, &tones, &links, &review.summary);
-                            ui.separator();
-                            ui.label(RichText::new("Where it sits").font(bold(14.0)).color(tones.strong));
+                            head(ui, &tones, "Where it sits");
                             ui.add_space(6.0);
                             let drawn = review.map.as_ref().and_then(|map| map.path.as_ref()).and_then(|path| host::text(&open.dir, &std::path::Path::new(path).with_extension("mmd").to_string_lossy()));
                             let sights: Vec<&'static str> = [review.map.is_some().then_some("This change"), open.data.system.is_some().then_some("Whole system"), Some("Folders")].into_iter().flatten().collect();
@@ -1358,33 +1428,40 @@ impl eframe::App for App {
                                 }
                             });
                             ui.data_mut(|data| data.insert_temp(kept, (sight, calls, named)));
-                            ui.add_space(14.0);
-                            ui.label(RichText::new("Read in this order").font(bold(14.0)).color(tones.strong));
+                            ui.add_space(16.0);
+                            head(ui, &tones, "Read in this order");
                             for (part, section) in review.sections.iter().enumerate() {
-                                ui.label(RichText::new(format!("{:02}  {}", part + 1, section.title)).font(bold(14.5)).color(tones.strong));
+                                let mut row = egui::text::LayoutJob::default();
+                                row.append(&format!("{:02}   ", part + 1), 0.0, egui::TextFormat { font_id: mono(13.0), color: tones.dim, line_height: Some(leading(16.0)), ..Default::default() });
+                                row.append(&section.title, 0.0, egui::TextFormat { font_id: FontId::proportional(16.0), color: tones.strong, line_height: Some(leading(16.0)), ..Default::default() });
+                                let hit = ui.add(egui::Label::new(row).selectable(false).sense(egui::Sense::click()));
+                                if fx::touch(ui, hit, tones.strong).clicked() {
+                                    jump = open.cards.iter().position(|card| matches!(card, Card::Part(at) if *at == part));
+                                }
                             }
                         }
                         Card::Part(part) => {
                             let section = &open.data.review.sections[part];
-                            ui.label(RichText::new(&section.title).font(serif(25.0)).color(tones.strong));
+                            title(ui, &tones, &section.title);
                             ui.label(RichText::new(&section.tier).font(mono(11.5)).color(tones.dim));
-                            ui.add_space(10.0);
+                            ui.add_space(20.0);
                             prose(ui, &tones, &links, &section.why);
                         }
                         Card::Thread(n) => {
                             let thread = open.data.threads[n].clone();
-                            ui.label(RichText::new(open.said(n)).font(serif(25.0)).color(tones.strong));
+                            title(ui, &tones, open.said(n));
                             ui.label(RichText::new(if thread.resolved { "resolved · already on the merge request" } else { "already on the merge request" }).font(mono(11.5)).color(tones.dim));
                             for (who, body, when) in &thread.notes {
-                                ui.add_space(10.0);
-                                ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(bold(13.0)).color(tones.strong));
+                                ui.add_space(20.0);
+                                ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(display(15.0)).color(tones.strong));
+                                ui.add_space(6.0);
                                 prose(ui, &tones, &links, body);
                             }
                         }
                         Card::Note(n) => {
                             let text = open.data.state["notes"][n]["text"].as_str().unwrap_or("").to_string();
-                            ui.label(RichText::new(open.about(n)).font(serif(25.0)).color(tones.strong));
-                            ui.add_space(10.0);
+                            title(ui, &tones, open.about(n));
+                            ui.add_space(16.0);
                             prose(ui, &tones, &links, &text);
                             if button(ui, &tones, &icon(Icon::Trash2, "Delete this comment"), false).clicked() {
                                 let mut state = open.data.state.clone();
@@ -1397,7 +1474,8 @@ impl eframe::App for App {
                             }
                         }
                         Card::Loose => {
-                            ui.label(RichText::new("Code in no part").font(serif(25.0)).color(tones.strong));
+                            title(ui, &tones, "Code in no part");
+                            ui.add_space(16.0);
                             prose(ui, &tones, &links, "These hunks are in the diff, but the guide put them in no section. Nothing vouches for them: read them.");
                         }
                         Card::Item(n) => {
@@ -1410,8 +1488,9 @@ impl eframe::App for App {
                                 });
                                 ui.label(RichText::new(&item.id).font(mono(11.5)).color(tones.dim));
                             });
-                            ui.label(RichText::new(&item.title).font(serif(25.0)).color(tones.strong));
                             ui.add_space(8.0);
+                            title(ui, &tones, &item.title);
+                            ui.add_space(12.0);
                             if item.kind != "good" {
                                 ui.horizontal(|ui| {
                                     if button(ui, &tones, &icon(Icon::Check, "Agree"), verdict.as_deref() == Some("agree")).clicked() {
@@ -1433,14 +1512,13 @@ impl eframe::App for App {
                                     }
                                 });
                             }
-                            ui.add_space(10.0);
+                            ui.add_space(24.0);
                             if open.data.product && !item.plain.trim().is_empty() {
                                 prose(ui, &tones, &links, &item.plain);
-                                ui.label(RichText::new("In detail").font(bold(14.0)).color(tones.strong));
+                                head(ui, &tones, "In detail");
                             }
                             prose(ui, &tones, &links, &item.body);
-                            ui.separator();
-                            ui.label(RichText::new(format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() })).font(bold(14.0)).color(tones.strong));
+                            head(ui, &tones, format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() }));
                             for (n, evidence) in item.evidence.iter().enumerate() {
                                 ui.add_space(8.0);
                                 let current = !open.in_diff && n == open.proof;
@@ -1472,7 +1550,7 @@ impl eframe::App for App {
                         (None, Card::Thread(_)) => "Reply in this thread".into(),
                         _ => "Comment on the whole merge request".into(),
                     };
-                    ui.label(RichText::new(about).font(bold(14.0)).color(tones.strong));
+                    head(ui, &tones, about);
                     let field = ui.add(egui::TextEdit::multiline(&mut open.draft).desired_width(f32::INFINITY).desired_rows(3).margin(egui::Margin::symmetric(10, 9)));
                     ui.add_space(6.0);
                     if std::mem::take(&mut open.compose) {
@@ -1494,6 +1572,9 @@ impl eframe::App for App {
             });
             bar(ui, !open.in_diff && !open.asking);
         });
+        if let Some(at) = jump {
+            (open.at, open.in_diff, open.line, open.proof, open.range) = (at, false, 0, 0, None);
+        }
         if open.agent && open.floating && !open.minimized {
             let at = ctx.content_rect().right_bottom() - egui::vec2(460.0, 620.0);
             egui::Window::new("agent").title_bar(false).resizable(true).default_pos(at).default_size([420.0, 540.0]).min_size([320.0, 320.0]).frame(egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.strong)).inner_margin(14.0)).show(&ctx, |ui| agent(ui, open, &tones));
@@ -1502,7 +1583,7 @@ impl eframe::App for App {
 
         if let Some((mut choice, mut text)) = open.publish.take() {
             let (mut keep, mut send) = (true, false);
-            egui::Window::new(RichText::new("Publish your review").font(serif(20.0)).color(tones.strong)).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).fixed_pos(middle).show(&ctx, |ui| {
+            egui::Window::new(RichText::new("Publish your review").font(display(20.0)).color(tones.strong)).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).fixed_pos(middle).show(&ctx, |ui| {
                 ui.set_width(680.0);
                 ui.label(RichText::new("This is exactly what goes to the merge request. Nothing is posted until you confirm.").color(tones.text));
                 for (n, how) in open.data.finish.iter().enumerate() {
@@ -1537,7 +1618,7 @@ impl eframe::App for App {
                 ui.set_width(600.0_f32.min(ui.ctx().content_rect().width() - 80.0));
                 ui.horizontal(|ui| {
                     ui.add_space(20.0);
-                    ui.label(RichText::new("Contents").font(serif(22.0)).color(tones.strong));
+                    ui.label(RichText::new("Contents").font(display(22.0)).color(tones.strong));
                 });
                 ui.add_space(10.0);
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -1565,7 +1646,7 @@ impl eframe::App for App {
                         }
                         let inner = egui::Rect::from_min_max(row.min + egui::vec2(if nested { 38.0 } else { 20.0 }, 0.0), row.max - egui::vec2(20.0, 0.0));
                         ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-                            ui.add(egui::Label::new(RichText::new(open.label(*card)).font(if nested { mono(12.5) } else { bold(14.0) }).color(ink)).truncate().selectable(false));
+                            ui.add(egui::Label::new(RichText::new(open.label(*card)).font(if nested { mono(12.5) } else { display(14.5) }).color(ink)).truncate().selectable(false));
                         });
                         if hit.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             go = Some(n);

@@ -86,7 +86,8 @@ it whenever a merge request has no guide here: on GitLab the artifact of a job n
 `revui-guide` in the merge request's pipeline for the current head (or its newest
 pipeline, which is what a merged-results pipeline is), on GitHub an artifact named
 `revui-guide` from a workflow run on the head commit. It holds `review.json` and
-`assets/`. A guide for another head, an unfinished one, or one that does not fit
+`assets/`, and `verify.json` with its logs when the pipeline ran the change in a
+sandbox. A guide for another head, an unfinished one, or one that does not fit
 the diff is ignored.
 
 Whoever can run a pipeline on the merge request's branch can write that artifact,
@@ -101,9 +102,10 @@ pipeline that starts from nothing each time writes them afresh. For marks to fol
 a CI guide, the job has to keep its bundles between runs (cache `REVUI_HOME`), so
 the agent updates the earlier guide instead of writing a new one.
 
-`examples/ci/` has a job for each host. Both install revui and an agent, run
-`revui prepare <link>`, and keep the bundle as the artifact. They are starting
-points: nothing here has run them in a real pipeline yet.
+[ci.md](ci.md) sets one up: `revui ci gitlab` and `revui ci github` print a job for
+each host, which writes the guide with a reviewer that can only read, and keeps
+`guide.html` beside it, the same review as a page anyone can open from the merge
+request.
 
 ## Writing guides
 

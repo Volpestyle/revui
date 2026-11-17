@@ -1,9 +1,13 @@
-# Writes a revui guide for every pull request and keeps it as an artifact named revui-guide.
+# Writes a revui guide for every pull request, as an artifact named revui-guide: the bundle revui reads, and
+# guide.html, the same review as one page anyone can open.
 # Anyone who then opens the pull request in revui gets that guide instead of starting a review.
 #
 # Copy to .github/workflows/revui-guide.yml and add the secret ANTHROPIC_API_KEY.
-# The job runs a coding agent with a shell over the pull request's content. It is limited to
-# branches of this repository: do not widen it to forks, whose changes could steer the agent.
+#
+# The reviewer reads the checkout and nothing else: no shell, nothing it can write, no settings from the checkout.
+# It is limited to branches of this repository: do not widen it to forks, since the job spends your key on whatever
+# the branch holds. docs/ci.md has the rest: your own review rules, a system map, tickets, and testing the change
+# in a sandbox.
 name: revui-guide
 
 on:
@@ -11,27 +15,35 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+
+concurrency:
+  group: revui-guide-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   guide:
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # A guide is advice: it never blocks the pull request.
+    continue-on-error: true
     env:
-      REVUI_HOME: ${{ github.workspace }}/.revui
-      GH_TOKEN: ${{ github.token }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_VERSION: "2.1.326"
     steps:
-      - run: npm install -g @anthropic-ai/claude-code
+      # The pull request's own head, with its history, not the merge commit GitHub makes for it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - run: npm install -g --silent "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - run: curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | REVUI_INSTALL_DIR=/usr/local/bin sudo -E sh
       - run: |
-          mkdir -p "$REVUI_HOME"
-          echo '{"prepare": "claude -p \"$REVUI_PROMPT\" --allowedTools Bash,Read,Write,Edit,Glob,Grep"}' > "$REVUI_HOME/config.json"
-          revui prepare "${{ github.event.pull_request.html_url }}"
-          cp -R "$(revui fetch "${{ github.event.pull_request.html_url }}")" revui-guide
+          revui ci script >"$RUNNER_TEMP/guide.sh"
+          bash "$RUNNER_TEMP/guide.sh"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: revui-guide
-          path: |
-            revui-guide/review.json
-            revui-guide/assets
+          path: revui-guide/
+          retention-days: 30

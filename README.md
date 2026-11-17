@@ -82,6 +82,15 @@ Pictures are inside the file and diagrams are drawn from their source in the rea
 
 <img src="docs/page.png" alt="A finding in the one-page guide: the contents, the card and the diff it cites">
 
+## From your pipeline
+
+A project can write the guide in CI, so it is there when anyone opens the merge request: in revui, or as that one page, linked from the merge request itself.
+
+    revui ci gitlab     # a job for .gitlab-ci.yml
+    revui ci github     # a workflow for .github/workflows/
+
+The reviewer it runs can only read: no shell, nothing it can write, no token for your host. Give the job a way to start your stack and it tests the change there too, and the guide says what it ran and what it saw. [docs/ci.md](docs/ci.md) has the setup.
+
 ## With an agent
 
 Each review has one agent, in a tab. It writes the review, and it is the one you ask afterwards, so it already knows the change. These are real

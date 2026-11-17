@@ -847,6 +847,13 @@ pub fn adopt(inbox: &Path, dir: &Path) -> bool {
     if real(&from.join("assets"), true) {
         let _ = copy_dir(&from.join("assets"), &dir.join("assets"));
     }
+    // What the pipeline's sandbox run did comes along: its record, and each step's log by the name the record gives it.
+    if let Some(run) = read(from.join("verify.json")) {
+        let logs = run["steps"].as_array().into_iter().flatten().filter_map(|step| step["step"].as_str()).filter(|name| !name.is_empty() && !name.contains(['/', '\\'])).map(|name| format!("{name}.log"));
+        for name in std::iter::once("verify.json".to_string()).chain(logs).filter(|name| real(&from.join(name), false)) {
+            let _ = fs::copy(from.join(&name), dir.join(&name));
+        }
+    }
     let _ = fs::write(dir.join("from-ci"), "");
     true
 }
@@ -1659,7 +1666,11 @@ fn a_guide_written_elsewhere_is_taken_only_for_the_same_head() {
     }
     std::os::unix::fs::symlink(&root, inbox.join("assets/link")).unwrap();
     fs::write(inbox.join("review.json"), whole).unwrap();
+    fs::write(inbox.join("verify.json"), r#"{"steps": [{"step": "seed", "ok": true, "seconds": 3}, {"step": "../../leak", "ok": true, "seconds": 1}]}"#).unwrap();
+    fs::write(inbox.join("seed.log"), "seeded").unwrap();
+    fs::write(root.join("leak.log"), "not the pipeline's").unwrap();
     assert!(adopt(inbox.parent().unwrap(), &dir) && finished_guide(&dir) && dir.join("assets/flow.png").exists() && !dir.join("assets/link").exists(), "links in the artifact are not followed");
+    assert!(dir.join("verify.json").exists() && dir.join("seed.log").exists() && fs::read_dir(&dir).unwrap().count() == 6, "the sandbox run comes along, and only the logs it names by a plain name");
     let bundle = Bundle::load(&dir).unwrap();
     assert_eq!((bundle.review.title.as_str(), bundle.review.sources[0].patch.as_str(), bundle.review.summary.as_str()), ("Retry order submission", "mr.patch", FROM_CI));
     let _ = fs::remove_dir_all(&root);

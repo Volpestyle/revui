@@ -1,32 +1,43 @@
-# Writes a revui guide for every merge request and keeps it as the artifact of a job named revui-guide.
+# Writes a revui guide for every merge request, as the artifact of a job named revui-guide: the bundle revui reads,
+# and guide.html, the same review as one page anyone can open from the merge request.
 # Anyone who then opens the merge request in revui gets that guide instead of starting a review.
 #
-# Add this job to .gitlab-ci.yml (the job name is what revui looks for) and set two CI/CD variables:
-#   ANTHROPIC_API_KEY   for the agent
-#   REVUI_GITLAB_TOKEN  a project access token with read_api, so glab can read the merge request
-# The job runs a coding agent with a shell over the merge request's content. Merge request pipelines
-# from forks run in the fork by default: keep it that way, since a fork's changes could steer the agent.
+# Add this job to .gitlab-ci.yml (the job name is what revui looks for) and set one masked CI/CD variable:
+#   ANTHROPIC_API_KEY   for the reviewer
+#
+# The reviewer reads the checkout and nothing else: no shell, nothing it can write, no settings from the checkout.
+# The job needs no token for GitLab. Merge request pipelines from forks run in the fork by default: keep it that
+# way, since the job spends your key on whatever the branch holds. docs/ci.md has the rest: your own review rules,
+# a system map, tickets, and testing the change in a sandbox.
 revui-guide:
-  image: node:22-bookworm
+  stage: test
+  image: node:24-bookworm
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      # Add `when: manual` here to write a guide only when someone asks for one.
+  # A guide is advice: it never blocks the merge request.
   allow_failure: true
+  interruptible: true
+  timeout: 20m
   variables:
-    GLAB_VERSION: "1.120.0"
-    REVUI_HOME: $CI_PROJECT_DIR/.revui
-    GITLAB_TOKEN: $REVUI_GITLAB_TOKEN
-    GITLAB_HOST: $CI_SERVER_HOST
-  script:
-    - curl -fsSL -o glab.deb "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.deb"
-    - apt-get update -qq && apt-get install -y -qq ./glab.deb unzip
-    - npm install -g @anthropic-ai/claude-code
+    # Enough history to find where the branch left its target.
+    GIT_DEPTH: "200"
+    CLAUDE_CODE_VERSION: "2.1.326"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq chromium >/dev/null
+    - npm install -g --silent "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
     - curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | REVUI_INSTALL_DIR=/usr/local/bin sh
-    - mkdir -p "$REVUI_HOME"
-    - echo '{"prepare":"claude -p \"$REVUI_PROMPT\" --allowedTools Bash,Read,Write,Edit,Glob,Grep"}' > "$REVUI_HOME/config.json"
-    - url="$CI_MERGE_REQUEST_PROJECT_URL/-/merge_requests/$CI_MERGE_REQUEST_IID"
-    - revui prepare "$url"
-    - cp -R "$(revui fetch "$url")" revui-guide
+    # Chromium refuses to start as root with its sandbox on; the job's container is the sandbox here.
+    - printf '#!/bin/sh\nexec chromium --no-sandbox "$@"\n' >/usr/local/bin/chromium-ci && chmod +x /usr/local/bin/chromium-ci
+    - export REVUI_CHROME=/usr/local/bin/chromium-ci
+  script:
+    - revui ci script >/tmp/guide.sh
+    - bash /tmp/guide.sh
   artifacts:
+    name: revui-guide-$CI_COMMIT_SHORT_SHA
+    # A link on the merge request itself: open guide.html from it.
+    expose_as: Guided review
+    when: always
+    expire_in: 30 days
     paths:
-      - revui-guide/review.json
-      - revui-guide/assets
+      - revui-guide/

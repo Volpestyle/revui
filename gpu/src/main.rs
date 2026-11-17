@@ -1237,10 +1237,10 @@ impl eframe::App for App {
                         }
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             for (n, past) in self.reviews.iter().enumerate() {
-                                let (fill, ink, faint) = if n == self.row { (tones.accent, tones.on_accent, tones.on_accent.gamma_multiply(0.7)) } else { (tones.raised, tones.strong, tones.dim) };
+                                let (fill, edge, ink, faint) = if n == self.row { (tones.strong.gamma_multiply(0.07), tones.dim, tones.strong, tones.dim) } else { (tones.pane, tones.line, tones.text, tones.faint) };
                                 let state = if !past.working.trim().is_empty() { past.working.clone() } else if past.done.is_some() { "published".into() } else if past.items > 0 { format!("{} of {} marked", past.marked, past.items) } else { "no guide yet".into() };
                                 let about = [format!("{}{}", past.repo.rsplit('/').next().unwrap_or(""), past.reference), past.author.clone(), state, past.when.clone()].join(" · ");
-                                let row = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, tones.line)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
+                                let row = egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, edge)).corner_radius(10.0).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
                                     ui.set_width(ui.available_width());
                                     ui.label(RichText::new(if past.title.is_empty() { &past.dir } else { &past.title }).size(16.0).line_height(Some(24.0)).color(ink));
                                     ui.label(RichText::new(about).size(13.0).line_height(Some(20.0)).color(faint));
@@ -1997,7 +1997,7 @@ impl eframe::App for App {
                                 ui.add_space(10.0);
                             }
                             if item.kind != "good" {
-                                ui.horizontal(|ui| {
+                                ui.horizontal_wrapped(|ui| {
                                     if button(ui, &tones, &icon(Icon::Check, "Agree"), verdict.as_deref() == Some("agree")).clicked() {
                                         marked = Some((item.id.clone(), "agree"));
                                     }

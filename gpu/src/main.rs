@@ -56,7 +56,20 @@ struct Section {
 
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
+struct Source {
+    url: String,
+    reference: String,
+    repo: String,
+    author: String,
+    branch: String,
+    target: String,
+    head_sha: String,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
 struct Review {
+    sources: Vec<Source>,
     title: String,
     summary: String,
     plain: String,
@@ -123,6 +136,9 @@ struct Data {
     product: bool,
     #[serde(rename = "refs")]
     links: Links,
+    /// Where each item's line opens on the code host.
+    #[serde(rename = "links")]
+    hosted: std::collections::BTreeMap<String, String>,
     quoted: std::collections::BTreeMap<String, bool>,
 }
 
@@ -185,10 +201,13 @@ fn paint(path: &str, lines: &[String]) -> Painted {
 }
 
 /// The colours of the page, for the appearance the system is in.
+#[derive(Clone, Copy)]
 struct Tones {
     bg: Color32,
+    pane: Color32,
     raised: Color32,
     line: Color32,
+    faint: Color32,
     dim: Color32,
     text: Color32,
     strong: Color32,
@@ -198,16 +217,16 @@ struct Tones {
     link: Color32,
 }
 
-const INK: Color32 = Color32::from_rgb(11, 11, 11);
-const ON_INK: Color32 = Color32::from_rgb(238, 237, 231);
-const ADDED: Color32 = Color32::from_rgb(20, 46, 28);
-const REMOVED: Color32 = Color32::from_rgb(58, 22, 26);
+const INK: Color32 = Color32::from_rgb(11, 11, 13);
+const ON_INK: Color32 = Color32::from_rgb(237, 237, 240);
+const ADDED: Color32 = Color32::from_rgb(15, 29, 21);
+const REMOVED: Color32 = Color32::from_rgb(33, 18, 20);
 
 fn tones(dark: bool) -> Tones {
     let rgb = Color32::from_rgb;
     match dark {
-        true => Tones { bg: rgb(22, 22, 20), raised: rgb(31, 31, 28), line: rgb(58, 58, 53), dim: rgb(156, 156, 146), text: rgb(205, 204, 196), strong: rgb(241, 240, 234), accent: rgb(241, 240, 234), on_accent: INK, rust: rgb(196, 122, 90), link: rgb(169, 172, 247) },
-        false => Tones { bg: rgb(246, 245, 240), raised: Color32::WHITE, line: rgb(214, 212, 202), dim: rgb(108, 109, 101), text: rgb(58, 59, 54), strong: rgb(22, 22, 20), accent: INK, on_accent: Color32::WHITE, rust: rgb(111, 63, 43), link: rgb(52, 71, 170) },
+        true => Tones { bg: INK, pane: rgb(16, 16, 18), raised: rgb(23, 23, 26), line: rgb(31, 31, 35), faint: rgb(102, 102, 110), dim: rgb(160, 160, 168), text: ON_INK, strong: ON_INK, accent: ON_INK, on_accent: INK, rust: rgb(240, 163, 94), link: rgb(169, 172, 247) },
+        false => Tones { bg: Color32::WHITE, pane: rgb(250, 250, 250), raised: rgb(242, 242, 243), line: rgb(232, 232, 234), faint: rgb(142, 142, 150), dim: rgb(85, 85, 92), text: rgb(24, 24, 27), strong: rgb(24, 24, 27), accent: rgb(24, 24, 27), on_accent: Color32::WHITE, rust: rgb(184, 86, 10), link: rgb(52, 71, 170) },
     }
 }
 
@@ -525,27 +544,72 @@ fn display(size: f32) -> FontId {
 
 /// How tall a line of text of this size is: reading text gets more air than the small text of a panel.
 fn leading(size: f32) -> f32 {
-    (size * if size >= 16.0 { 1.8 } else { 1.6 }).round()
+    (size * 1.62).round()
 }
 
 /// The heading of a card.
 fn title(ui: &mut egui::Ui, tones: &Tones, text: impl AsRef<str>) {
-    ui.label(RichText::new(text.as_ref()).font(display(28.0)).line_height(Some(39.0)).color(tones.strong));
     ui.add_space(4.0);
+    ui.label(RichText::new(text.as_ref()).font(bold(22.0)).line_height(Some(29.0)).color(tones.strong));
+    ui.add_space(8.0);
+}
+
+/// What an item is, as its line of the diff reads and as its mark in the contents is coloured: only a blocker and a fix stand out.
+fn hue(tones: &Tones, item: &Item) -> Color32 {
+    match item.severity.as_str() {
+        "blocker" if item.kind == "finding" => if tones.bg == INK { Color32::from_rgb(255, 115, 105) } else { Color32::from_rgb(196, 40, 28) },
+        "fix" if item.kind == "finding" => tones.rust,
+        _ => tones.dim,
+    }
+}
+
+fn kind(item: &Item) -> &str {
+    if item.kind == "finding" && !item.severity.is_empty() { &item.severity } else { &item.kind }
+}
+
+fn tier(tier: &str) -> &str {
+    match tier {
+        "core" => "the core change",
+        "supporting" => "supporting code",
+        "low" => "low signal, skim it",
+        other => other,
+    }
+}
+
+/// An item's id in a small box, coloured by what the item is; a press goes to it.
+fn chip(ui: &mut egui::Ui, tones: &Tones, item: &Item) -> egui::Response {
+    let made = egui::Frame::new().stroke(Stroke::new(1.0, tones.line)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(6, 1)).show(ui, |ui| ui.add(egui::Label::new(RichText::new(&item.id).font(mono(12.0)).color(hue(tones, item))).selectable(false)));
+    fx::touch(ui, made.response.interact(egui::Sense::click()), tones.strong)
+}
+
+/// A button that is only its icon, lit while what it shows is open.
+fn bare(ui: &mut egui::Ui, tones: &Tones, icon: Icon, hint: &str, enabled: bool, on: bool) -> bool {
+    let made = ui.add_enabled(enabled, egui::Button::new(RichText::new(icon.unicode().to_string()).size(17.0).color(if on { tones.strong } else { tones.dim })).frame(false).min_size(egui::vec2(28.0, 28.0)));
+    fx::touch(ui, made, tones.strong).on_hover_text(hint).clicked()
+}
+
+/// A key as it is printed on one, and what it does.
+fn keycap(ui: &mut egui::Ui, tones: &Tones, keys: &str, does: &str) {
+    ui.spacing_mut().item_spacing.x = 4.0;
+    for key in keys.split(' ') {
+        egui::Frame::new().fill(tones.raised).corner_radius(5.0).inner_margin(egui::Margin::symmetric(6, 1)).show(ui, |ui| ui.add(egui::Label::new(RichText::new(key).font(mono(12.0)).color(tones.strong)).selectable(false)));
+    }
+    ui.add(egui::Label::new(RichText::new(does).font(mono(12.5)).color(tones.faint)).selectable(false));
+    ui.add_space(10.0);
 }
 
 /// The heading of a part of a card.
 fn head(ui: &mut egui::Ui, tones: &Tones, text: impl AsRef<str>) {
-    ui.add_space(16.0);
-    ui.label(RichText::new(text.as_ref()).font(display(20.0)).line_height(Some(30.0)).color(tones.strong));
     ui.add_space(10.0);
+    ui.label(RichText::new(text.as_ref().to_uppercase()).font(bold(11.5)).extra_letter_spacing(0.8).line_height(Some(19.0)).color(tones.faint));
+    ui.add_space(4.0);
 }
 
 /// A picture from the bundle shown in place; anything else it holds (a recording, a file) as a link. Either opens in the machine's own viewer or player.
 fn artifact(ui: &mut egui::Ui, dir: &str, path: &str) {
     let shown = matches!(std::path::Path::new(path).extension().and_then(|kind| kind.to_str()), Some("png" | "jpg" | "jpeg" | "gif" | "webp"));
     let hit = match shown {
-        true => ui.add(egui::Image::new(host::uri(dir, path)).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(0.0).sense(egui::Sense::click())),
+        true => ui.add(egui::Image::new(host::uri(dir, path)).fit_to_exact_size(egui::vec2(ui.available_width(), 560.0)).corner_radius(8.0).sense(egui::Sense::click())),
         false => ui.link(format!("Open {path}")),
     };
     if hit.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open it (Enter)").clicked() {
@@ -615,11 +679,11 @@ fn line(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) 
 }
 
 fn prose(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
-    prose_at(ui, tones, links, text, 16.0);
+    prose_at(ui, tones, links, text, 15.5);
 }
 
 fn prose_at(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) {
-    let roomy = size >= 16.0;
+    let roomy = size >= 15.0;
     ui.scope(|ui| {
         ui.set_max_width(800.0_f32.min(ui.available_width()));
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -627,9 +691,14 @@ fn prose_at(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f
         for (n, block) in blocks.enumerate() {
             let mut lines = block.lines().peekable();
             if let Some(heading) = lines.peek().and_then(|line| line.strip_prefix("# ")) {
-                ui.add_space(if n == 0 { 0.0 } else if roomy { 16.0 } else { 6.0 });
-                ui.label(RichText::new(heading).font(display(if roomy { 20.0 } else { size + 1.5 })).line_height(Some(if roomy { 30.0 } else { leading(size) })).color(tones.strong));
-                ui.add_space(if roomy { 12.0 } else { 4.0 });
+                match roomy {
+                    true => head(ui, tones, heading),
+                    false => {
+                        ui.add_space(if n == 0 { 0.0 } else { 6.0 });
+                        ui.label(RichText::new(heading).font(display(size + 1.5)).line_height(Some(leading(size))).color(tones.strong));
+                        ui.add_space(4.0);
+                    }
+                }
                 lines.next();
             }
             let mut after = 0.0;
@@ -645,9 +714,9 @@ fn prose_at(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f
                 } else {
                     self::line(ui, tones, links, line, size);
                 }
-                after = if listed { if roomy { 8.0 } else { 4.0 } } else { 0.0 };
+                after = if listed { 4.0 } else { 0.0 };
             }
-            ui.add_space(if roomy { 24.0 } else { 10.0 });
+            ui.add_space(10.0);
         }
     });
 }
@@ -655,7 +724,7 @@ fn prose_at(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f
 fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Response {
     let (fill, ink) = if on { (tones.accent, tones.on_accent) } else { (tones.raised, tones.strong) };
     let tight = std::mem::replace(&mut ui.spacing_mut().button_padding, egui::vec2(12.0, 7.0));
-    let made = ui.add(egui::Button::new(RichText::new(label).font(bold(14.0)).color(ink)).fill(fill).stroke(Stroke::new(1.0, if on { tones.accent } else { tones.text })).corner_radius(0.0));
+    let made = ui.add(egui::Button::new(RichText::new(label).font(bold(14.0)).color(ink)).fill(fill).stroke(Stroke::new(1.0, if on { tones.accent } else { tones.line })).corner_radius(8.0));
     ui.spacing_mut().button_padding = tight;
     fx::touch(ui, made, ink)
 }
@@ -852,15 +921,15 @@ impl eframe::App for App {
         if self.dressed != Some(ui.visuals().dark_mode) {
             self.dressed = Some(ui.visuals().dark_mode);
             let mut visuals = ui.visuals().clone();
-            (visuals.window_corner_radius, visuals.menu_corner_radius) = (0.into(), 0.into());
-            (visuals.window_fill, visuals.panel_fill, visuals.extreme_bg_color) = (tones.raised, tones.bg, if ui.visuals().dark_mode { INK } else { Color32::WHITE });
-            (visuals.window_stroke, visuals.window_shadow) = (Stroke::new(1.0, tones.strong), egui::Shadow::NONE);
+            (visuals.window_corner_radius, visuals.menu_corner_radius) = (14.into(), 8.into());
+            (visuals.window_fill, visuals.panel_fill, visuals.extreme_bg_color) = (tones.bg, tones.bg, tones.pane);
+            (visuals.window_stroke, visuals.window_shadow) = (Stroke::new(1.0, tones.line), egui::Shadow { offset: [0, 16], blur: 48, spread: 0, color: Color32::from_black_alpha(70) });
             (visuals.selection.bg_fill, visuals.selection.stroke) = (tones.accent, Stroke::new(1.0, tones.on_accent));
             for look in [&mut visuals.widgets.noninteractive, &mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active, &mut visuals.widgets.open] {
-                look.corner_radius = 0.into();
+                look.corner_radius = 8.into();
             }
             visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, tones.line);
-            visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, tones.text);
+            visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, tones.line);
             visuals.override_text_color = Some(tones.text);
             visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
             ctx.set_visuals(visuals);
@@ -968,12 +1037,20 @@ impl eframe::App for App {
 
         let typing = ctx.egui_wants_keyboard_input();
         let pressed = |key: Key| !typing && ctx.input(|input| input.key_pressed(key) && !input.modifiers.command && !input.modifiers.ctrl);
-        if pressed(Key::Q) && self.open.as_ref().is_some_and(|open| open.contents.is_none() && open.publish.is_none()) {
+        // A sheet over the review: the keys, or what the review is made of.
+        let sheets = egui::Id::new("sheet");
+        let mut sheet = ctx.data(|data| data.get_temp::<&'static str>(sheets));
+        if sheet.is_some() && ctx.input(|input| input.key_pressed(Key::Escape) || input.key_pressed(Key::Q)) {
+            sheet = None;
+            ctx.data_mut(|data| data.remove::<&'static str>(sheets));
+        } else if pressed(Key::Q) && self.open.as_ref().is_some_and(|open| open.contents.is_none() && open.publish.is_none()) {
             return self.list();
         }
         let open = self.open.as_mut().expect("a review is open");
         let links = open.data.links.clone();
-        let modal = open.contents.is_some() || open.publish.is_some();
+        let modal = open.contents.is_some() || open.publish.is_some() || sheet.is_some();
+        let folds = egui::Id::new("rail folded");
+        let mut folded = ctx.data(|data| data.get_temp::<bool>(folds)).unwrap_or(false);
         let pressed = |key: Key| !modal && pressed(key);
         let step = (pressed(Key::L) || pressed(Key::ArrowRight)) as isize - (pressed(Key::H) || pressed(Key::ArrowLeft)) as isize;
         if step != 0 {
@@ -981,10 +1058,22 @@ impl eframe::App for App {
             (open.in_diff, open.line, open.proof, open.range) = (false, 0, 0, None);
         }
         open.diff ^= pressed(Key::D);
-        if pressed(Key::B) {
+        let shift = ctx.input(|input| input.modifiers.shift);
+        if pressed(Key::B) && !shift {
             open.contents = Some(open.at);
         }
-        let shift = ctx.input(|input| input.modifiers.shift);
+        folded ^= pressed(Key::B) && shift;
+        if pressed(Key::Questionmark) || pressed(Key::Slash) {
+            sheet = Some("keys");
+        }
+        if pressed(Key::S) && shift {
+            sheet = Some("stats");
+        }
+        if pressed(Key::M) {
+            if let Some(url) = open.data.review.sources.first().filter(|source| !source.url.is_empty()) {
+                ctx.open_url(egui::OpenUrl::new_tab(&url.url));
+            }
+        }
         let held = |key: Key| !typing && !modal && ctx.input(|input| input.modifiers.ctrl && input.key_pressed(key));
         let asking = std::mem::take(&mut open.asking);
         if std::mem::take(&mut self.tab) && !modal {
@@ -1073,32 +1162,52 @@ impl eframe::App for App {
             }
         }
 
-        egui::Panel::top("bar").frame(frame.inner_margin(egui::Margin::symmetric(16, 9))).show_inside(ui, |ui| {
+        let source = open.data.review.sources.first().cloned().unwrap_or_default();
+        let changed = |sign: char| open.data.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
+        let (added, removed) = (changed('+'), changed('-'));
+        let (plus, minus) = if tones.bg == INK { (Color32::from_rgb(95, 196, 138), Color32::from_rgb(255, 115, 105)) } else { (Color32::from_rgb(31, 138, 76), Color32::from_rgb(196, 40, 28)) };
+        egui::Panel::top("bar").frame(frame.inner_margin(egui::Margin::symmetric(18, 8))).show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.set_min_height(34.0);
+                ui.set_min_height(40.0);
                 home = logo(ui, 20.0).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Your reviews (q)").clicked();
-                ui.label(RichText::new(&open.data.review.title).font(display(16.0)).color(tones.strong));
+                ui.add_space(4.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
                     let count = if open.data.outgoing > 0 { open.data.outgoing.to_string() } else { String::new() };
                     if button(ui, &tones, &icon(Icon::Send, &count), true).on_hover_text("Publish (p)").clicked() {
                         open.publish = Some((0, open.data.preview.clone()));
                     }
-                    if button(ui, &tones, &icon(Icon::Bot, if open.chat.busy { "working" } else { "" }), open.agent && !open.minimized).on_hover_text("Agent (t)").clicked() {
+                    ui.add_space(6.0);
+                    if bare(ui, &tones, if tones.bg == INK { Icon::Sun } else { Icon::Moon }, "Switch between light and dark", true, false) {
+                        ctx.set_theme(if tones.bg == INK { egui::Theme::Light } else { egui::Theme::Dark });
+                    }
+                    if bare(ui, &tones, Icon::ChartNoAxesColumn, "Stats for this review (S)", true, sheet == Some("stats")) {
+                        sheet = Some("stats");
+                    }
+                    if bare(ui, &tones, Icon::Bot, if open.chat.busy { "Agent, working (t)" } else { "Agent (t)" }, true, open.agent && !open.minimized) {
                         (open.agent, open.minimized) = (!open.agent || open.minimized, false);
                     }
-                    open.diff ^= button(ui, &tones, &icon(Icon::FileDiff, ""), open.diff).on_hover_text("Diff (d)").clicked();
-                    if button(ui, &tones, &icon(Icon::List, ""), false).on_hover_text("Contents (b)").clicked() {
-                        open.contents = Some(open.at);
-                    }
-                    ui.add_space(10.0);
-                    ui.spacing_mut().item_spacing.x = 5.0;
-                    let bare = |ui: &mut egui::Ui, icon: Icon, hint: &str, on: bool| {
-                        let made = ui.add_enabled(on, egui::Button::new(RichText::new(icon.unicode().to_string()).size(17.0).color(tones.strong)).frame(false));
-                        fx::touch(ui, made, tones.strong).on_hover_text(hint).clicked()
-                    };
-                    turn += bare(ui, Icon::ChevronRight, "Next (l)", open.at + 1 < open.cards.len()) as isize;
-                    ui.label(RichText::new(format!("{} of {}", open.at + 1, open.cards.len())).font(mono(11.5)).color(tones.dim));
-                    turn -= bare(ui, Icon::ChevronLeft, "Back (h)", open.at > 0) as isize;
+                    open.diff ^= bare(ui, &tones, Icon::FileDiff, "Diff (d)", true, open.diff);
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.horizontal(|ui| {
+                            let named = format!("{} {}", source.repo.rsplit('/').next().unwrap_or(""), source.reference);
+                            if !named.trim().is_empty() {
+                                let link = ui.add(egui::Label::new(RichText::new(named.trim()).font(bold(15.0)).color(tones.dim)).selectable(false).sense(egui::Sense::click()));
+                                if link.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open the merge request (m)").clicked() && !source.url.is_empty() {
+                                    ctx.open_url(egui::OpenUrl::new_tab(&source.url));
+                                }
+                            }
+                            let part = |font: FontId, color| egui::TextFormat { font_id: font, color, ..Default::default() };
+                            let mut title = egui::text::LayoutJob::default();
+                            title.append(&open.data.review.title, 0.0, part(bold(15.0), tones.strong));
+                            title.append(&format!("+{added}"), 10.0, part(display(15.0), plus));
+                            title.append(&format!("−{removed}"), 5.0, part(display(15.0), minus));
+                            ui.add(egui::Label::new(title).truncate());
+                        });
+                        let about = [format!("{} files", open.data.files.len()), format!("head {:.8}", source.head_sha), format!("{} → {}", source.branch, source.target), source.author.clone()];
+                        ui.add(egui::Label::new(RichText::new(about.iter().filter(|part| !part.is_empty() && part.as_str() != " → " && part.as_str() != "head ").cloned().collect::<Vec<_>>().join(" · ")).size(12.5).color(tones.faint)).truncate());
+                    });
                 });
             });
             if open.chat.busy {
@@ -1106,23 +1215,57 @@ impl eframe::App for App {
                 fx::shimmer(ui, egui::Rect::from_min_max(egui::pos2(edge.left(), edge.bottom() - 2.0), edge.max), tones.accent);
             }
         });
+        // Where you are: the contents column, back and next, and the card shown, which opens the list of them all.
+        egui::Panel::top("where").frame(frame.inner_margin(egui::Margin::symmetric(18, 4))).show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                folded ^= bare(ui, &tones, Icon::PanelLeft, "Collapse or open the contents column (B)", true, false);
+                ui.add_space(6.0);
+                turn -= bare(ui, &tones, Icon::ChevronLeft, "Back (h)", open.at > 0, true) as isize;
+                turn += bare(ui, &tones, Icon::ChevronRight, "Next (l)", open.at + 1 < open.cards.len(), true) as isize;
+                ui.add_space(8.0);
+                let name = match open.cards[open.at] {
+                    Card::Summary => "summary".into(),
+                    Card::Part(part) => format!("part {}", part + 1),
+                    Card::Item(n) => format!("{} {}", kind(&open.data.review.items[n]), open.data.review.items[n].id),
+                    Card::Thread(_) => "thread".into(),
+                    Card::Note(_) => "your comment".into(),
+                    Card::Loose => "code in no part".into(),
+                };
+                let now = ui.add(egui::Label::new(RichText::new(format!("{} of {} · {name}  {}", open.at + 1, open.cards.len(), Icon::ChevronDown.unicode())).font(mono(13.0)).color(tones.strong)).selectable(false).sense(egui::Sense::click()));
+                if fx::touch(ui, now, tones.strong).on_hover_text("Contents (b)").clicked() {
+                    open.contents = Some(open.at);
+                }
+            });
+        });
+        ctx.data_mut(|data| data.insert_temp(folds, folded));
         if turn != 0 {
             open.at = (open.at as isize + turn).clamp(0, open.cards.len() as isize - 1) as usize;
             (open.in_diff, open.line, open.proof, open.range) = (false, 0, 0, None);
         }
         egui::Panel::bottom("keys").frame(frame.inner_margin(egui::Margin::symmetric(14, 5))).show_inside(ui, |ui| {
-            let here = if open.in_diff { "j k line · V select lines · c comment on them · tab next panel" } else { "j k scroll · e evidence · enter open it · a agree · x dismiss · c comment · tab next panel" };
-            let said = if open.note.is_empty() { String::new() } else { format!("   {}", open.note) };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if open.agent && open.minimized {
                     let name = format!("{}  Agent{}", Icon::Bot.unicode(), if open.chat.busy { " · working" } else { "" });
-                    let chip = ui.add(egui::Button::new(RichText::new(name).font(bold(12.5)).color(tones.on_accent)).fill(tones.accent).corner_radius(0.0));
+                    let chip = ui.add(egui::Button::new(RichText::new(name).font(bold(12.5)).color(tones.on_accent)).fill(tones.accent).corner_radius(8.0));
                     if fx::touch(ui, chip, tones.on_accent).on_hover_text("Restore the agent (Cmd-J or Cmd-Shift-M)").clicked() {
                         open.minimized = false;
                     }
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(egui::Label::new(RichText::new(format!("l next · h back · {here} · g G ends · u U page · t ask · v verify · i diagram · d diff · b contents · p publish · q reviews{said}")).font(mono(11.5)).color(tones.dim)).truncate());
+                    ui.set_clip_rect(ui.max_rect());
+                    let item = matches!(open.cards[open.at], Card::Item(_));
+                    let here: &[(&str, &str)] = match (open.in_diff, item) {
+                        (true, _) => &[("j k", "line"), ("V", "select"), ("c", "comment")],
+                        (false, true) => &[("j k", "scroll"), ("a", "agree"), ("x", "dismiss"), ("c", "comment"), ("e", "evidence")],
+                        (false, false) => &[("j k", "scroll"), ("c", "comment")],
+                    };
+                    for (keys, does) in [("l", "next"), ("h", "back")].iter().chain(here).chain(&[("tab", "pane"), ("t", "ask"), ("d", "diff"), ("b", "contents"), ("p", "publish"), ("?", "help")]) {
+                        keycap(ui, &tones, keys, does);
+                    }
+                    if !open.note.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(&open.note).font(mono(12.5)).color(tones.dim)).truncate());
+                    }
                 });
             });
         });
@@ -1136,6 +1279,87 @@ impl eframe::App for App {
             egui::Panel::right("agent").default_size(380.0).frame(frame.inner_margin(14.0).stroke(Stroke::new(1.0, tones.line))).show_inside(ui, |ui| {
                 agent(ui, open, &tones);
                 bar(ui, open.asking);
+            });
+        }
+
+        // The contents stand in a column beside every card: each part with what kind of code it is above its title,
+        // and under it its items, their ids in one column and their titles in the next. Folded, it is a strip of marks.
+        let wide = ctx.content_rect().width() >= 860.0;
+        if wide {
+            let turned = ctx.data(|data| data.get_temp::<usize>(egui::Id::new("rail shows"))) != Some(open.at);
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("rail shows"), open.at));
+            egui::Panel::left("rail").exact_size(if folded { 54.0 } else { 300.0 }).resizable(false).frame(frame.inner_margin(egui::Margin { left: if folded { 6 } else { 10 }, right: if folded { 6 } else { 10 }, top: 14, bottom: 0 })).show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("rail").auto_shrink(false).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    for (n, card) in open.cards.iter().enumerate() {
+                        let on = n == open.at;
+                        let item = match card {
+                            Card::Item(item) => Some(&open.data.review.items[*item]),
+                            _ => None,
+                        };
+                        let nested = matches!(card, Card::Item(_) | Card::Thread(_) | Card::Note(_));
+                        let fill = if on { tones.strong.gamma_multiply(0.07) } else { Color32::TRANSPARENT };
+                        let ink = if on { tones.strong } else if nested { tones.dim } else { tones.text };
+                        let mark = item.map_or(tones.faint, |item| if on { tones.strong } else if hue(&tones, item) == tones.dim { tones.faint } else { hue(&tones, item) });
+                        if !nested && n > 0 {
+                            ui.add_space(if folded { 8.0 } else { 12.0 });
+                        }
+                        let row = if folded {
+                            let short = match card {
+                                Card::Summary => Icon::List.unicode().to_string(),
+                                Card::Part(part) => (part + 1).to_string(),
+                                Card::Item(_) => item.map(|item| item.id.clone()).unwrap_or_default(),
+                                Card::Thread(_) | Card::Note(_) => Icon::MessageSquare.unicode().to_string(),
+                                Card::Loose => "…".into(),
+                            };
+                            egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(0, 6)).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.vertical_centered(|ui| ui.add(egui::Label::new(RichText::new(short).font(mono(12.0)).color(if nested { mark } else { ink })).selectable(false)));
+                            })
+                        } else if nested {
+                            let row = egui::Frame::new().fill(fill).outer_margin(egui::Margin { left: 10, ..Default::default() }).inner_margin(egui::Margin { left: 12, right: 10, top: 5, bottom: 5 }).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal_top(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    if let Some(item) = item {
+                                        ui.add_sized([30.0, 19.0], egui::Label::new(RichText::new(&item.id).font(mono(11.5)).color(mark)).selectable(false).halign(egui::Align::Min));
+                                    }
+                                    let name = item.map_or_else(|| open.label(*card), |item| item.title.clone());
+                                    ui.add(egui::Label::new(RichText::new(name).size(13.0).line_height(Some(18.5)).color(ink)).wrap().selectable(false));
+                                });
+                            });
+                            let edge = row.response.rect;
+                            ui.painter().vline(edge.left() + 10.5, edge.y_range().expand(0.5), Stroke::new(1.0, if on { tones.strong } else { tones.line }));
+                            if let Some(verdict) = item.and_then(|item| open.verdict(&item.id)) {
+                                ui.painter().circle_filled(egui::pos2(edge.right() - 6.0, edge.top() + 14.0), 2.5, if verdict == "dismiss" { tones.rust } else { tones.strong });
+                            }
+                            row
+                        } else {
+                            egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                if let Card::Part(part) = card {
+                                    let kind = &open.data.review.sections[*part].tier;
+                                    let over = if kind.is_empty() { (part + 1).to_string() } else { format!("{} · {}", part + 1, kind.to_uppercase()) };
+                                    ui.add(egui::Label::new(RichText::new(over).font(mono(10.5)).extra_letter_spacing(0.8).color(tones.faint)).selectable(false));
+                                }
+                                let name = match card {
+                                    Card::Part(part) => open.data.review.sections[*part].title.clone(),
+                                    other => open.label(*other),
+                                };
+                                ui.add(egui::Label::new(RichText::new(name).font(display(14.0)).line_height(Some(20.0)).color(if on { tones.strong } else { tones.text })).wrap().selectable(false));
+                            })
+                        };
+                        let hit = row.response.interact(egui::Sense::click());
+                        if on && turned {
+                            hit.scroll_to_me(None);
+                        }
+                        if fx::touch(ui, hit, tones.strong).on_hover_text(if folded { open.label(*card) } else { String::new() }).clicked() {
+                            jump = Some(n);
+                        }
+                    }
+                    ui.add_space(28.0);
+                });
             });
         }
 
@@ -1173,10 +1397,37 @@ impl eframe::App for App {
                     at += (sign != '\\') as usize;
                 }
             }
+            // The line a finding is about is marked, and the diff opens on it; a part opens at its top.
+            let cited = match open.cards[open.at] {
+                Card::Item(n) => open.data.review.items[n].at.clone(),
+                _ => None,
+            };
+            let marked = cited.as_ref().and_then(|at| open.lines().iter().position(|(file, line, old)| !old && *file == at.file && *line == at.line));
+            let turned = ctx.data(|data| data.get_temp::<(usize, usize)>(egui::Id::new("diff shows"))) != Some((open.at, group));
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("diff shows"), (open.at, group)));
+            if let (true, false, Some(line)) = (turned, open.in_diff, marked) {
+                open.line = line;
+            }
             let cursor = rows.iter().position(|row| matches!(row, Shown::Line { at, sign, .. } if *sign != '\\' && *at == open.line));
-            egui::Panel::right("diff").default_size(620.0).frame(egui::Frame::new().fill(INK)).show_inside(ui, |ui| {
+            let half = (ctx.content_rect().width() - if wide { if folded { 54.0 } else { 300.0 } } else { 0.0 }) / 2.0;
+            egui::Panel::right("diff").default_size(half.max(320.0)).frame(egui::Frame::new().fill(INK)).show_inside(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                egui::ScrollArea::both().auto_shrink(false).show_rows(ui, TALL, rows.len(), |ui, seen| {
+                let about = match &cited {
+                    Some(at) => format!("diff · {}:{}", at.file, at.line),
+                    None => format!("diff · {} files in this part", rows.iter().filter(|row| matches!(row, Shown::File(_))).count()),
+                };
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(18, 6)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.add(egui::Label::new(RichText::new(about).font(mono(12.5)).color(if open.in_diff { ON_INK } else { Color32::from_rgb(102, 102, 110) })).truncate());
+                });
+                ui.painter().hline(ui.clip_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, Color32::from_rgb(31, 31, 35)));
+                let area = egui::ScrollArea::both().auto_shrink(false);
+                let area = match (turned, cursor.filter(|_| marked.is_some())) {
+                    (true, Some(row)) => area.vertical_scroll_offset((row as f32 * TALL - ui.available_height() / 2.0).max(0.0)).horizontal_scroll_offset(0.0),
+                    (true, None) => area.vertical_scroll_offset(0.0).horizontal_scroll_offset(0.0),
+                    _ => area,
+                };
+                area.show_rows(ui, TALL, rows.len(), |ui, seen| {
                     if let (true, true, Some(cursor)) = (open.in_diff, open.moved, cursor) {
                         let top = ui.max_rect().top() + (cursor as f32 - seen.start as f32) * TALL;
                         ui.scroll_to_rect(egui::Rect::from_min_size(egui::pos2(ui.max_rect().left(), top), egui::vec2(1.0, TALL)), None);
@@ -1187,14 +1438,21 @@ impl eframe::App for App {
                         let wide = egui::vec2(ui.available_width(), TALL);
                         match *row {
                             Shown::Gap => drop(ui.allocate_space(egui::vec2(1.0, TALL))),
-                            Shown::File(file) => drop(ui.allocate_ui_with_layout(wide, across, |ui| {
-                                ui.add_space(14.0);
-                                ui.label(RichText::new(&open.data.files[file].path).font(mono(13.0)).color(Color32::WHITE).strong());
-                            })),
-                            Shown::Hunk(file, hunk) => drop(ui.allocate_ui_with_layout(wide, across, |ui| {
-                                ui.add_space(14.0);
-                                ui.label(RichText::new(&open.data.files[file].hunks[hunk].header).font(mono(11.0)).color(Color32::from_white_alpha(120)));
-                            })),
+                            Shown::File(file) => {
+                                ui.painter().rect_filled(band, 0.0, Color32::from_rgb(16, 16, 18));
+                                ui.painter().hline(band.x_range(), band.top(), Stroke::new(1.0, Color32::from_rgb(31, 31, 35)));
+                                ui.allocate_ui_with_layout(wide, across, |ui| {
+                                    ui.add_space(18.0);
+                                    ui.add(egui::Label::new(RichText::new(&open.data.files[file].path).font(mono(12.5)).color(ON_INK)).extend());
+                                });
+                            }
+                            Shown::Hunk(file, hunk) => {
+                                ui.painter().rect_filled(band, 0.0, Color32::from_rgb(19, 19, 22));
+                                ui.allocate_ui_with_layout(wide, across, |ui| {
+                                    ui.add_space(58.0);
+                                    ui.add(egui::Label::new(RichText::new(&open.data.files[file].hunks[hunk].header).font(mono(12.0)).color(Color32::from_rgb(102, 102, 110))).extend());
+                                });
+                            }
                             Shown::Line { file, hunk, nth, number, sign, at } => {
                                 let (shown, lines) = (&open.data.files[file], &open.data.files[file].hunks[hunk].lines);
                                 let painted = open.painted.entry((file, hunk)).or_insert_with(|| paint(&shown.path, lines));
@@ -1203,19 +1461,24 @@ impl eframe::App for App {
                                     '-' => (REMOVED, Color32::from_white_alpha(170)),
                                     _ => (Color32::TRANSPARENT, Color32::from_white_alpha(140)),
                                 };
+                                let cited = sign != '\\' && marked == Some(at);
                                 let under = open.in_diff && sign != '\\' && at == open.line;
                                 let chosen = open.in_diff && sign != '\\' && open.range.is_some_and(|from| (from.min(open.line)..=from.max(open.line)).contains(&at));
                                 ui.painter().rect_filled(band, 0.0, fill);
+                                if cited {
+                                    ui.painter().rect_filled(band, 0.0, Color32::from_rgb(37, 37, 43));
+                                    ui.painter().rect_filled(egui::Rect::from_min_size(band.min, egui::vec2(2.0, TALL)), 0.0, ON_INK);
+                                }
                                 if chosen {
                                     ui.painter().rect_filled(band, 0.0, Color32::from_white_alpha(28));
                                     ui.painter().rect_filled(egui::Rect::from_min_size(band.min, egui::vec2(3.0, TALL)), 0.0, Color32::WHITE);
                                 }
                                 ui.allocate_ui_with_layout(wide, across, |ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;
-                                    ui.label(RichText::new(format!("{number:>5} ")).font(mono(11.0)).color(Color32::from_white_alpha(120)));
+                                    ui.label(RichText::new(format!("{number:>6}  ")).font(mono(12.0)).color(Color32::from_rgb(102, 102, 110)));
                                     ui.label(RichText::new(format!("{sign} ")).font(mono(12.5)).color(match sign {
-                                        '+' => Color32::from_rgb(95, 211, 138),
-                                        '-' => Color32::from_rgb(240, 120, 125),
+                                        '+' => Color32::from_rgb(95, 196, 138),
+                                        '-' => Color32::from_rgb(255, 115, 105),
                                         _ => ink,
                                     }));
                                     let mut code = egui::text::LayoutJob::default();
@@ -1226,7 +1489,8 @@ impl eframe::App for App {
                                     ui.add(egui::Label::new(code).extend());
                                 });
                                 if under {
-                                    ui.painter().rect_stroke(band, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
+                                    ui.painter().rect_filled(band, 0.0, Color32::from_white_alpha(22));
+                                    ui.painter().rect_filled(egui::Rect::from_min_size(band.min, egui::vec2(2.0, TALL)), 0.0, ON_INK);
                                 }
                                 if sign != '\\' && ui.interact(band, ui.id().with(("diff line", at)), egui::Sense::click()).clicked() {
                                     clicked = Some(at);
@@ -1242,50 +1506,11 @@ impl eframe::App for App {
             }
         }
 
-        egui::CentralPanel::default().frame(frame.inner_margin(egui::Margin::symmetric(30, 26))).show_inside(ui, |ui| {
-            // The card is a column 800 wide. With room beside it, the contents stand in a rail to its left, and the two are centred together.
+        let beside = open.diff && open.group().is_some();
+        egui::CentralPanel::default().frame(frame.inner_margin(if beside { egui::Margin { left: 22, right: 22, top: 18, bottom: 0 } } else { egui::Margin { left: 30, right: 30, top: 26, bottom: 0 } })).show_inside(ui, |ui| {
+            // The card is one column: beside the diff it keeps to the left, alone it sits in the middle.
             const COLUMN: f32 = 800.0;
-            const RAIL: f32 = 250.0;
-            const GAP: f32 = 60.0;
-            let panel = ui.available_rect_before_wrap();
-            let railed = panel.width() >= COLUMN + RAIL + GAP;
-            let inset = ((panel.width() - COLUMN - if railed { RAIL + GAP } else { 0.0 }) / 2.0).max(0.0) + if railed { RAIL + GAP } else { 0.0 };
-            if railed {
-                let beside = egui::Rect::from_min_max(egui::pos2(panel.left() + inset - GAP - RAIL, panel.top()), egui::pos2(panel.left() + inset - GAP, panel.bottom()));
-                let mut rail = ui.new_child(egui::UiBuilder::new().max_rect(beside).layout(egui::Layout::top_down(egui::Align::Min)));
-                let seen = egui::Id::new("rail shows");
-                let turned = rail.data(|data| data.get_temp::<usize>(seen)) != Some(open.at);
-                rail.data_mut(|data| data.insert_temp(seen, open.at));
-                egui::ScrollArea::vertical().id_salt("rail").auto_shrink(false).show(&mut rail, |ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    for (n, card) in open.cards.iter().enumerate() {
-                        let (nested, on) = (matches!(card, Card::Item(_) | Card::Thread(_) | Card::Note(_)), n == open.at);
-                        let text = RichText::new(open.label(*card)).font(if on { display(14.0) } else { FontId::proportional(14.0) }).line_height(Some(21.0)).color(if on { tones.strong } else { tones.dim });
-                        let fill = if on { tones.strong.gamma_multiply(0.07) } else { Color32::TRANSPARENT };
-                        let row = egui::Frame::new().fill(fill).corner_radius(12.0).inner_margin(egui::Margin { left: if nested { 28 } else { 12 }, right: 12, top: 8, bottom: 8 }).show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.add(egui::Label::new(text).selectable(false));
-                        });
-                        if let Card::Item(item) = card {
-                            let mark = match open.verdict(&open.data.review.items[*item].id) {
-                                Some("dismiss") => Some(tones.rust),
-                                Some(_) => Some(tones.strong),
-                                None => None,
-                            };
-                            if let Some(mark) = mark {
-                                ui.painter().rect_filled(egui::Rect::from_center_size(egui::pos2(row.response.rect.left() + 15.0, row.response.rect.top() + 18.0), egui::vec2(6.0, 6.0)), 0.0, mark);
-                            }
-                        }
-                        let hit = row.response.interact(egui::Sense::click());
-                        if on && turned {
-                            hit.scroll_to_me(Some(egui::Align::Center));
-                        }
-                        if fx::touch(ui, hit, tones.strong).clicked() {
-                            jump = Some(n);
-                        }
-                    }
-                });
-            }
+            let inset = if beside { 0.0 } else { ((ui.available_width() - COLUMN) / 2.0).max(0.0) };
             let area = egui::ScrollArea::vertical().auto_shrink(false);
             let area = match glide.1 {
                 Some(bottom) => area.vertical_scroll_offset(if bottom { f32::MAX } else { 0.0 }),
@@ -1303,13 +1528,13 @@ impl eframe::App for App {
                     match open.cards[open.at] {
                         Card::Summary => {
                             let review = &open.data.review;
-                            let slab = egui::Frame::new().fill(INK).inner_margin(egui::Margin::symmetric(32, 28)).show(ui, |ui| {
+                            let slab = egui::Frame::new().fill(Color32::from_rgb(17, 18, 22)).stroke(Stroke::new(1.0, Color32::from_white_alpha(18))).corner_radius(16.0).inner_margin(egui::Margin::symmetric(32, 28)).show(ui, |ui| {
                                 let under = ui.painter().add(egui::Shape::Noop);
                                 ui.set_width(ui.available_width());
                                 ui.label(RichText::new(&review.title).font(display(28.0)).line_height(Some(39.0)).color(Color32::WHITE));
                                 ui.add_space(20.0);
-                                let lines = |sign: char| open.data.files.iter().flat_map(|file| &file.hunks).flat_map(|hunk| &hunk.lines).filter(|line| line.starts_with(sign)).count();
-                                let stats = [(review.sections.len().to_string(), "parts"), (review.items.iter().filter(|item| item.kind == "finding").count().to_string(), "findings"), (review.items.iter().filter(|item| item.kind == "decision").count().to_string(), "decisions"), (open.data.files.len().to_string(), "files"), (format!("+{} −{}", lines('+'), lines('-')), "lines")];
+                                let count = |kind: &str| review.items.iter().filter(|item| item.kind == kind).count().to_string();
+                                let stats = [(review.sections.len().to_string(), "parts"), (count("finding"), "findings"), (count("decision"), "decisions"), (count("good"), "good calls"), (open.data.files.len().to_string(), "files")];
                                 ui.columns(stats.len(), |columns| {
                                     for (column, (value, name)) in columns.iter_mut().zip(&stats) {
                                         column.add(egui::Label::new(RichText::new(value).font(display(28.0)).color(Color32::WHITE)).extend());
@@ -1319,9 +1544,9 @@ impl eframe::App for App {
                                 under
                             });
                             fx::flow(ui, slab.inner, slab.response.rect, Color32::from_rgb(154, 158, 242));
-                            ui.add_space(32.0);
-                            if open.data.product && !review.plain.trim().is_empty() {
-                                prose(ui, &tones, &links, &review.plain);
+                            ui.add_space(28.0);
+                            if !review.plain.trim().is_empty() {
+                                prose_at(ui, &Tones { text: tones.dim, ..tones }, &links, &review.plain, 16.5);
                                 head(ui, &tones, "In detail");
                             }
                             prose(ui, &tones, &links, &review.summary);
@@ -1387,7 +1612,7 @@ impl eframe::App for App {
                                 }
                             }
                             let labels = named.unwrap_or(nodes.len() <= 14);
-                            egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.line)).inner_margin(14.0).show(ui, |ui| {
+                            egui::Frame::new().fill(tones.bg).stroke(Stroke::new(1.0, tones.line)).corner_radius(12.0).inner_margin(14.0).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     for name in sights.iter().filter(|_| sights.len() > 1) {
@@ -1410,9 +1635,9 @@ impl eframe::App for App {
                                     (true, Some(path)) => artifact(ui, &open.dir, path),
                                     _ => {}
                                 }
-                                ui.label(RichText::new(&caption).font(bold(13.5)).color(tones.strong));
+                                ui.label(RichText::new(&caption).size(13.0).color(tones.faint));
                                 if !text.is_empty() {
-                                    ui.label(RichText::new(&text).size(13.0).color(tones.text));
+                                    ui.label(RichText::new(&text).size(13.0).color(tones.dim));
                                 }
                                 if review.map.is_none() || rootless {
                                     ui.add_space(6.0);
@@ -1431,21 +1656,53 @@ impl eframe::App for App {
                             ui.add_space(16.0);
                             head(ui, &tones, "Read in this order");
                             for (part, section) in review.sections.iter().enumerate() {
-                                let mut row = egui::text::LayoutJob::default();
-                                row.append(&format!("{:02}   ", part + 1), 0.0, egui::TextFormat { font_id: mono(13.0), color: tones.dim, line_height: Some(leading(16.0)), ..Default::default() });
-                                row.append(&section.title, 0.0, egui::TextFormat { font_id: FontId::proportional(16.0), color: tones.strong, line_height: Some(leading(16.0)), ..Default::default() });
-                                let hit = ui.add(egui::Label::new(row).selectable(false).sense(egui::Sense::click()));
-                                if fx::touch(ui, hit, tones.strong).clicked() {
-                                    jump = open.cards.iter().position(|card| matches!(card, Card::Part(at) if *at == part));
-                                }
+                                ui.horizontal_top(|ui| {
+                                    ui.add_sized([22.0, leading(15.5)], egui::Label::new(RichText::new(format!("{}.", part + 1)).size(15.5).color(tones.text)).selectable(false));
+                                    ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 2.0;
+                                        let hit = ui.add(egui::Label::new(RichText::new(&section.title).size(15.5).line_height(Some(leading(15.5))).color(tones.strong).underline()).selectable(false).sense(egui::Sense::click()));
+                                        if fx::touch(ui, hit, tones.strong).clicked() {
+                                            jump = open.cards.iter().position(|card| matches!(card, Card::Part(at) if *at == part));
+                                        }
+                                        ui.label(RichText::new(tier(&section.tier)).size(13.0).color(tones.faint));
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 5.0;
+                                            for (n, item) in review.items.iter().enumerate().filter(|(_, item)| item.section == Some(part)) {
+                                                if chip(ui, &tones, item).on_hover_text(&item.title).clicked() {
+                                                    jump = open.cards.iter().position(|card| matches!(card, Card::Item(at) if *at == n));
+                                                }
+                                            }
+                                        });
+                                    });
+                                });
+                                ui.add_space(8.0);
                             }
                         }
                         Card::Part(part) => {
                             let section = &open.data.review.sections[part];
+                            let mut over = egui::text::LayoutJob::default();
+                            over.append(&(part + 1).to_string(), 0.0, egui::TextFormat { font_id: mono(13.0), color: tones.strong, ..Default::default() });
+                            over.append(&format!(" · {}", tier(&section.tier)), 0.0, egui::TextFormat { font_id: mono(13.0), color: tones.dim, ..Default::default() });
+                            ui.label(over);
                             title(ui, &tones, &section.title);
-                            ui.label(RichText::new(&section.tier).font(mono(11.5)).color(tones.dim));
-                            ui.add_space(20.0);
                             prose(ui, &tones, &links, &section.why);
+                            let within: Vec<(usize, &Item)> = open.data.review.items.iter().enumerate().filter(|(_, item)| item.section == Some(part)).collect();
+                            if within.is_empty() {
+                                ui.label(RichText::new("Nothing to raise in this part.").size(13.0).color(tones.faint));
+                            } else {
+                                head(ui, &tones, "In this part");
+                            }
+                            for (n, item) in within {
+                                ui.horizontal_top(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    let pressed = chip(ui, &tones, item).clicked();
+                                    let hit = ui.add(egui::Label::new(RichText::new(&item.title).size(15.5).line_height(Some(leading(15.5))).color(tones.text)).wrap().selectable(false).sense(egui::Sense::click()));
+                                    if pressed || fx::touch(ui, hit, tones.strong).clicked() {
+                                        jump = open.cards.iter().position(|card| matches!(card, Card::Item(at) if *at == n));
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
                         }
                         Card::Thread(n) => {
                             let thread = open.data.threads[n].clone();
@@ -1453,7 +1710,7 @@ impl eframe::App for App {
                             ui.label(RichText::new(if thread.resolved { "resolved · already on the merge request" } else { "already on the merge request" }).font(mono(11.5)).color(tones.dim));
                             for (who, body, when) in &thread.notes {
                                 ui.add_space(20.0);
-                                ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(display(15.0)).color(tones.strong));
+                                ui.label(RichText::new(format!("@{} · {when}", who.trim_start_matches('@'))).font(mono(13.0)).color(tones.dim));
                                 ui.add_space(6.0);
                                 prose(ui, &tones, &links, body);
                             }
@@ -1481,16 +1738,30 @@ impl eframe::App for App {
                         Card::Item(n) => {
                             let item = open.data.review.items[n].clone();
                             let verdict = open.verdict(&item.id).map(String::from);
-                            ui.horizontal(|ui| {
-                                let kind = if item.kind == "finding" && !item.severity.is_empty() { &item.severity } else { &item.kind };
-                                egui::Frame::new().fill(if item.severity == "blocker" { tones.rust } else { tones.raised }).stroke(Stroke::new(1.0, tones.rust)).inner_margin(egui::Margin::symmetric(7, 2)).show(ui, |ui| {
-                                    ui.label(RichText::new(kind).font(bold(12.0)).color(if item.severity == "blocker" { Color32::WHITE } else { tones.rust }))
-                                });
-                                ui.label(RichText::new(&item.id).font(mono(11.5)).color(tones.dim));
-                            });
-                            ui.add_space(8.0);
+                            let proof = |how: &str| match how {
+                                "observed" => "confirmed by a run".to_string(),
+                                "inferred" => "reasoned from the code".to_string(),
+                                other => other.to_string(),
+                            };
+                            let part = |color| egui::TextFormat { font_id: mono(13.0), color, ..Default::default() };
+                            let mut over = egui::text::LayoutJob::default();
+                            over.append(&item.id, 0.0, part(tones.strong));
+                            over.append(" · ", 0.0, part(tones.dim));
+                            let named = kind(&item);
+                            over.append(&format!("{}{}", named[..1].to_uppercase(), &named[1..]), 0.0, part(hue(&tones, &item)));
+                            if let Some(first) = item.evidence.first().filter(|first| !first.provenance.is_empty()) {
+                                over.append(&format!(" · {}", proof(&first.provenance)), 0.0, part(tones.dim));
+                            }
+                            ui.label(over);
                             title(ui, &tones, &item.title);
-                            ui.add_space(12.0);
+                            if let Some(at) = &item.at {
+                                let place = egui::Frame::new().fill(tones.raised).corner_radius(5.0).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| ui.add(egui::Label::new(RichText::new(format!("{}:{}", at.file, at.line)).font(mono(12.0)).color(tones.dim)).wrap().selectable(false)));
+                                let hosted = open.data.hosted.get(&item.id);
+                                if hosted.is_some() && fx::touch(ui, place.response.interact(egui::Sense::click()), tones.strong).on_hover_text("Open on the code host").clicked() {
+                                    ctx.open_url(egui::OpenUrl::new_tab(hosted.expect("checked")));
+                                }
+                                ui.add_space(10.0);
+                            }
                             if item.kind != "good" {
                                 ui.horizontal(|ui| {
                                     if button(ui, &tones, &icon(Icon::Check, "Agree"), verdict.as_deref() == Some("agree")).clicked() {
@@ -1512,37 +1783,37 @@ impl eframe::App for App {
                                     }
                                 });
                             }
-                            ui.add_space(24.0);
-                            if open.data.product && !item.plain.trim().is_empty() {
-                                prose(ui, &tones, &links, &item.plain);
-                                head(ui, &tones, "In detail");
+                            ui.add_space(14.0);
+                            if !item.plain.trim().is_empty() {
+                                prose(ui, &Tones { text: tones.dim, ..tones }, &links, &item.plain);
                             }
                             prose(ui, &tones, &links, &item.body);
-                            head(ui, &tones, format!("Evidence ({})", if item.evidence.is_empty() { "none".into() } else { item.evidence.len().to_string() }));
+                            if !item.evidence.is_empty() {
+                                head(ui, &tones, format!("Evidence ({})", item.evidence.len()));
+                            }
                             for (n, evidence) in item.evidence.iter().enumerate() {
                                 ui.add_space(8.0);
                                 let current = !open.in_diff && n == open.proof;
-                                let proof = egui::Frame::new().fill(INK).stroke(Stroke::new(if current { 2.0 } else { 0.0 }, tones.rust)).inner_margin(14.0).show(ui, |ui| {
+                                let shown = egui::Frame::new().fill(tones.pane).stroke(Stroke::new(1.0, if current && item.evidence.len() > 1 { tones.dim } else { tones.line })).corner_radius(8.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                                     ui.set_width(ui.available_width());
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new(format!("evidence.{}", n + 1)).font(mono(11.5)).color(ON_INK.gamma_multiply(0.6)));
-                                        ui.label(RichText::new(&evidence.provenance).font(mono(12.0)).color(ON_INK));
-                                    });
-                                    ui.label(RichText::new(&evidence.caption).font(bold(14.0)).color(Color32::WHITE));
+                                    ui.label(RichText::new(proof(&evidence.provenance)).font(mono(12.5)).color(tones.faint));
+                                    ui.label(RichText::new(&evidence.caption).size(15.5).line_height(Some(leading(15.5))).color(tones.text));
                                     if let Some(path) = &evidence.path {
+                                        ui.add_space(6.0);
                                         artifact(ui, &open.dir, path);
                                     }
                                     if let Some(text) = evidence.text.as_ref().filter(|text| !text.trim().is_empty()) {
-                                        ui.label(RichText::new(text).font(mono(12.0)).color(ON_INK));
+                                        ui.add_space(6.0);
+                                        prose_at(ui, &tones, &links, text, 14.0);
                                     }
                                 });
                                 if current && open.moved {
-                                    proof.response.scroll_to_me(None);
+                                    shown.response.scroll_to_me(None);
                                 }
                             }
                         }
                     }
-                    ui.add_space(18.0);
+                    ui.add_space(14.0);
                     // A label for the box under it, not a heading: what the comment lands on is set small, in mono.
                     let (lead, on) = match (open.picked(), open.cards[open.at]) {
                         (Some((file, line, _, Some(first))), _) => ("Comment on", format!("{file}:{first}-{line}")),
@@ -1574,6 +1845,7 @@ impl eframe::App for App {
                             open.note = problem;
                         }
                     }
+                    ui.add_space(28.0);
                 });
             });
             bar(ui, !open.in_diff && !open.asking);
@@ -1619,12 +1891,12 @@ impl eframe::App for App {
             let seen = egui::Id::new("contents row");
             let moved = ctx.data(|data| data.get_temp::<usize>(seen)) != Some(on);
             ctx.data_mut(|data| data.insert_temp(seen, on));
-            let frame = egui::Frame::new().fill(tones.raised).stroke(Stroke::new(1.0, tones.strong)).inner_margin(egui::Margin::symmetric(0, 16));
+            let frame = egui::Frame::new().fill(tones.bg).stroke(Stroke::new(1.0, tones.line)).corner_radius(12.0).inner_margin(egui::Margin::symmetric(0, 16));
             let shown = egui::Modal::new(egui::Id::new("contents")).frame(frame).show(&ctx, |ui| {
                 ui.set_width(600.0_f32.min(ui.ctx().content_rect().width() - 80.0));
                 ui.horizontal(|ui| {
                     ui.add_space(20.0);
-                    ui.label(RichText::new("Contents").font(display(22.0)).color(tones.strong));
+                    ui.label(RichText::new("CONTENTS").font(bold(11.5)).extra_letter_spacing(0.8).color(tones.faint));
                 });
                 ui.add_space(10.0);
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -1632,18 +1904,17 @@ impl eframe::App for App {
                     for (n, card) in open.cards.iter().enumerate() {
                         let nested = matches!(card, Card::Item(_) | Card::Thread(_) | Card::Note(_));
                         let (row, hit) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
-                        let ink = if n == on { tones.on_accent } else if hit.hovered() { tones.accent } else if nested { tones.text } else { tones.strong };
+                        let ink = if n == on || hit.hovered() { tones.strong } else if nested { tones.dim } else { tones.text };
                         if n == on {
-                            ui.painter().rect_filled(row, 0.0, tones.accent);
+                            ui.painter().rect_filled(row, 0.0, tones.strong.gamma_multiply(0.07));
                             if moved {
                                 hit.scroll_to_me(Some(egui::Align::Center));
                             }
                         }
-                        ui.painter().hline(row.x_range(), row.bottom(), Stroke::new(1.0, tones.line));
                         if let Card::Item(item) = card {
                             let mark = match open.verdict(&open.data.review.items[*item].id) {
                                 Some("dismiss") => Some(tones.rust),
-                                Some(_) => Some(if n == on { tones.on_accent } else { tones.accent }),
+                                Some(_) => Some(tones.accent),
                                 None => None,
                             };
                             if let Some(mark) = mark {
@@ -1652,7 +1923,7 @@ impl eframe::App for App {
                         }
                         let inner = egui::Rect::from_min_max(row.min + egui::vec2(if nested { 38.0 } else { 20.0 }, 0.0), row.max - egui::vec2(20.0, 0.0));
                         ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-                            ui.add(egui::Label::new(RichText::new(open.label(*card)).font(if nested { mono(12.5) } else { display(14.5) }).color(ink)).truncate().selectable(false));
+                            ui.add(egui::Label::new(RichText::new(open.label(*card)).font(if nested { FontId::proportional(14.0) } else { display(15.0) }).color(ink)).truncate().selectable(false));
                         });
                         if hit.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             go = Some(n);
@@ -1668,6 +1939,47 @@ impl eframe::App for App {
             if let Some(n) = go.or(enter.then_some(on)) {
                 (open.at, open.contents, open.in_diff, open.line, open.proof) = (n, None, false, 0, 0);
             }
+        }
+        if let Some(which) = sheet {
+            let frame = egui::Frame::new().fill(tones.bg).stroke(Stroke::new(1.0, tones.line)).corner_radius(14.0).inner_margin(egui::Margin { left: 22, right: 22, top: 6, bottom: 16 });
+            let shown = egui::Modal::new(egui::Id::new("sheet shown")).frame(frame).show(&ctx, |ui| {
+                ui.set_width(if which == "keys" { 620.0_f32 } else { 520.0 }.min(ui.ctx().content_rect().width() - 32.0));
+                let rows = |ui: &mut egui::Ui, name: &str, wide: f32, rows: &[(&str, String)]| {
+                    head(ui, &tones, name);
+                    egui::Grid::new(name).num_columns(2).spacing([12.0, 6.0]).min_col_width(wide).show(ui, |ui| {
+                        for (left, right) in rows {
+                            match which {
+                                "keys" => drop(ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    for key in left.split(' ') {
+                                        egui::Frame::new().fill(tones.raised).corner_radius(5.0).inner_margin(egui::Margin::symmetric(6, 1)).show(ui, |ui| ui.label(RichText::new(key).font(mono(12.0)).color(tones.strong)));
+                                    }
+                                })),
+                                _ => drop(ui.label(RichText::new(*left).size(14.0).color(tones.text))),
+                            }
+                            ui.add(egui::Label::new(RichText::new(right).size(14.0).color(tones.text)).wrap());
+                            ui.end_row();
+                        }
+                    });
+                };
+                let said = |rows: &[(&'static str, &str)]| rows.iter().map(|(keys, does)| (*keys, does.to_string())).collect::<Vec<_>>();
+                if which == "keys" {
+                    rows(ui, "Moving", 92.0, &said(&[("l →", "Next card: the summary, each part, each finding"), ("h ←", "Previous card"), ("j k", "Scroll the card; in the diff, move one line"), ("u U", "Page down, page up"), ("g G", "The top, the bottom"), ("tab", "Move to the next panel: card, diff, agent"), ("b", "Contents: list every card and jump to one"), ("B", "Collapse the contents column to a strip, or open it"), ("q", "Back to your reviews")]));
+                    rows(ui, "Diff and evidence", 92.0, &said(&[("d", "Show or hide the diff"), ("V", "In the diff, select lines from here"), ("e E", "Evidence: next, previous"), ("enter o", "Open the evidence shown"), ("m", "Open the merge request in the browser"), ("S", "Stats: the change and the guide")]));
+                    rows(ui, "Your review", 92.0, &said(&[("a x", "Agree with a finding, or dismiss it"), ("c", "Comment: on the card, or on the diff lines selected"), ("t", "Ask the agent"), ("v i", "Have it verify this card, or draw a diagram for it"), ("p", "Publish: see exactly what goes out first")]));
+                } else {
+                    let review = &open.data.review;
+                    let kinds = ["blocker", "fix", "suggestion", "question", "decision", "good"].iter().filter_map(|named| Some(review.items.iter().filter(|item| kind(item) == *named).count()).filter(|count| *count > 0).map(|count| format!("{count} {named}"))).collect::<Vec<_>>();
+                    rows(ui, "This review", 130.0, &[("Merge request", format!("{} {}", source.repo, source.reference)), ("Head", format!("{:.8} {} → {}", source.head_sha, source.branch, source.target)), ("Change", format!("{} files · +{added} −{removed}", open.data.files.len())), ("Guide", format!("{} parts · {} items", review.sections.len(), review.items.len())), ("Items", if kinds.is_empty() { "none".into() } else { kinds.join(" · ") }), ("Marked", format!("{} of {}", review.items.iter().filter(|item| open.verdict(&item.id).is_some()).count(), review.items.len()))]);
+                }
+            });
+            if shown.should_close() {
+                sheet = None;
+            }
+        }
+        match sheet {
+            Some(which) => drop(ctx.data_mut(|data| data.insert_temp(sheets, which))),
+            None => ctx.data_mut(|data| data.remove::<&'static str>(sheets)),
         }
         #[cfg(not(target_arch = "wasm32"))]
         if rooting && open.root().is_some() {

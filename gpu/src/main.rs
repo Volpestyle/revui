@@ -1543,14 +1543,20 @@ impl eframe::App for App {
                         }
                     }
                     ui.add_space(18.0);
-                    let about = match (open.picked(), open.cards[open.at]) {
-                        (Some((file, line, _, Some(first))), _) => format!("Comment on {file}:{first}-{line}"),
-                        (Some((file, line, _, None)), _) => format!("Comment on {file}:{line}"),
-                        (None, Card::Item(n)) => format!("Comment on {}", open.data.review.items[n].id),
-                        (None, Card::Thread(_)) => "Reply in this thread".into(),
-                        _ => "Comment on the whole merge request".into(),
+                    // A label for the box under it, not a heading: what the comment lands on is set small, in mono.
+                    let (lead, on) = match (open.picked(), open.cards[open.at]) {
+                        (Some((file, line, _, Some(first))), _) => ("Comment on", format!("{file}:{first}-{line}")),
+                        (Some((file, line, _, None)), _) => ("Comment on", format!("{file}:{line}")),
+                        (None, Card::Item(n)) => ("Comment on", open.data.review.items[n].id.clone()),
+                        (None, Card::Thread(_)) => ("Reply in this thread", String::new()),
+                        _ => ("Comment on the whole merge request", String::new()),
                     };
-                    head(ui, &tones, about);
+                    let mut about = egui::text::LayoutJob::default();
+                    about.append(lead, 0.0, egui::TextFormat { font_id: display(14.0), color: tones.strong, line_height: Some(21.0), ..Default::default() });
+                    about.append(&on, 8.0, egui::TextFormat { font_id: mono(12.5), color: tones.dim, line_height: Some(21.0), ..Default::default() });
+                    ui.add_space(12.0);
+                    ui.label(about);
+                    ui.add_space(6.0);
                     let field = ui.add(egui::TextEdit::multiline(&mut open.draft).desired_width(f32::INFINITY).desired_rows(3).margin(egui::Margin::symmetric(10, 9)));
                     ui.add_space(6.0);
                     if std::mem::take(&mut open.compose) {

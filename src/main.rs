@@ -1,4 +1,5 @@
 mod web;
+mod html;
 mod bundle;
 mod draw;
 mod input;
@@ -1851,6 +1852,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let named = args[1..].iter().find(|arg| !arg.starts_with("--")).ok_or("usage: revui web <dir | mr url>")?;
             return web::serve(named);
         }
+        (Some("html"), Some(dir)) => return Ok(println!("{}", html::write(Path::new(dir), args.get(2))?.display())),
         (Some("json"), Some(dir)) => return Ok(println!("{}", shared::json(&Bundle::load(Path::new(dir))?))),
         (Some("state"), Some(dir)) => {
             let state: State = serde_json::from_reader(std::io::stdin()).map_err(|e| format!("state: {e}"))?;
@@ -2014,6 +2016,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui prepare [mr url]  write the guides those are missing, or that one's, with no one watching\n\
                  revui hunks <dir>       list the diff's files and hunk indexes\n\
                  revui web <dir | mr url>   the same review in a browser, drawn on the GPU (needs the interface built in a checkout: cd gpu && trunk build --release)\n\
+                 revui html <dir> [out]  write the review as one page, guide.html, that any browser opens with no revui: an artifact a pipeline keeps, or a file to send\n\
                  revui json <dir>        print the review, its diff, your marks and what would go out, for another front end\n\
                  revui state <dir>       save your marks, read as JSON from stdin\n\
                  revui threads <dir>     ask the host what is already said on the merge request\n\

@@ -71,6 +71,15 @@ Both are built from a checkout of this repo for now: neither is in the releases 
 
 [gpu/README.md](gpu/README.md) has the details.
 
+## As one page
+
+`revui html <dir>` writes the review as a single file, `guide.html`, that any browser opens with no revui and no server: the same cards, contents, diff and keys, read-only. A pipeline can keep it as an artifact of the merge request, or you can send it to someone.
+
+    revui html <dir>              # writes <dir>/guide.html
+    revui html <dir> review.html  # or where you say
+
+Pictures are inside the file and diagrams are drawn from their source in the reader's light or dark theme. A recording plays from its file beside the page.
+
 ## With an agent
 
 Each review has one agent, in a tab. It writes the review, and it is the one you ask afterwards, so it already knows the change. These are real

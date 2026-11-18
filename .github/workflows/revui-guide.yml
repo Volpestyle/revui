@@ -1,0 +1,54 @@
+# Writes a revui guide for every pull request and posts it there as one comment, replaced on each push. The run
+# keeps an artifact named revui-guide: the bundle revui reads, and guide.html, the same review as one page.
+# Anyone who then opens the pull request in revui gets that guide instead of starting a review.
+#
+# Copy to .github/workflows/revui-guide.yml and add the secret ANTHROPIC_API_KEY.
+#
+# The reviewer reads the checkout and nothing else: no shell, nothing it can write, no settings from the checkout.
+# It is limited to branches of this repository: do not widen it to forks, since the job spends your key on whatever
+# the branch holds. docs/ci.md has the rest: your own review rules, a system map, tickets, and testing the change
+# in a sandbox.
+name: revui-guide
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  # For the comment. Remove this and GUIDE_POST_TOKEN below to write the guide without posting it.
+  pull-requests: write
+
+concurrency:
+  group: revui-guide-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guide:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # A guide is advice: it never blocks the pull request.
+    continue-on-error: true
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_VERSION: "2.1.326"
+    steps:
+      # The pull request's own head, with its history, not the merge commit GitHub makes for it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - run: npm install -g --silent "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - run: curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | REVUI_INSTALL_DIR=/usr/local/bin sudo -E sh
+      - run: |
+          revui ci script >"$RUNNER_TEMP/guide.sh"
+          bash "$RUNNER_TEMP/guide.sh"
+        env:
+          # Only the script's last step uses it: the reviewer never sees it.
+          GUIDE_POST_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: revui-guide
+          path: revui-guide/
+          retention-days: 30

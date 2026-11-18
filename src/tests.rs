@@ -673,3 +673,38 @@ fn a_pipeline_comment_cannot_run_commands_or_notify_people() {
     assert!(text.contains("<b>B1</b> · blocker"));
     assert!(text.contains("[Open the whole guide](https://example.com/guide)"));
 }
+
+#[test]
+fn a_pipeline_comment_leaves_code_as_written_and_nothing_else() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
+    let mut bundle = Bundle::load(&dir).unwrap();
+    let posted = |bundle: &mut Bundle, body: &str| {
+        bundle.review.items[0].body = body.into();
+        shared::comment(bundle, None)
+    };
+    let text = posted(&mut bundle, "Install `@anthropic-ai/claude-code` and ask @sam.\n\n```sh\n/usr/bin/env node\nnpm i @scope/pkg\n```\n\n/approve");
+    assert!(text.contains("`@anthropic-ai/claude-code`") && text.contains("\n/usr/bin/env node\nnpm i @scope/pkg\n"), "code is what someone copies");
+    assert!(text.contains("@\u{200b}sam") && text.contains("\n\u{200b}/approve"), "prose around it is still made inert");
+    let text = posted(&mut bundle, "Returns `Vec<String>`, see `@scope/pkg`.");
+    assert!(text.contains("`@scope/pkg`"), "a < inside code is code");
+
+    // Each of these reads as code to a careless parser and as prose to the host.
+    for body in [
+        "```\n/approve\n@sam",                  // a fence that never closes
+        "<div>\n```\n/approve\n@sam\n```",     // a fence inside an HTML block is text
+        "text\n```\n/approve\n@sam\n```",      // GitLab's own reading of a fence is not relied on mid-paragraph
+        "`` ` `` @sam `",                         // runs of different lengths
+        "a `\n` @sam ` b",                        // a span that opened on the line before
+        "\\` @sam ` x `",                         // an escaped backtick opens nothing
+        "<a title=\"`\"> @sam ` x `",             // a tag swallows a backtick
+        "# a `\n@sam `",                          // a stray backtick earlier in the block
+        "<textarea>\n\n`@sam`\n\n```\n/approve\n```", // raw HTML that a blank line does not end
+        "````\n```\n/approve\n@sam\n````",       // a fence a simpler reader would close early
+    ] {
+        let text = posted(&mut bundle, body);
+        assert!(!text.contains("@sam"), "{body:?} left a mention live");
+        assert!(!text.lines().any(|line| line.trim_start().starts_with("/approve")), "{body:?} left a command live");
+    }
+    bundle.review.items[0].title = "`@sam` did it".into();
+    assert!(!shared::comment(&bundle, None).contains("@sam"), "a title sits in HTML, where backticks are not code");
+}

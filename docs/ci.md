@@ -47,7 +47,9 @@ run that holds the artifact on GitHub. `GUIDE_LINK` names another address.
 What is posted is text a model wrote, under a token that may act on the merge request,
 so `revui ci comment` makes it inert first: a line that opens with `/` would be a
 command on GitLab (`/approve`, `/close`) and `@name` would notify that person, and
-neither survives. `revui ci comment <dir>` prints the comment without posting it.
+neither survives. Code is left exactly as written, in a fenced block or in backticks,
+so what you copy out of a finding is what the reviewer wrote; where it is unclear
+whether something is code, it is treated as prose. `revui ci comment <dir>` prints the comment without posting it.
 
 ## What the reviewer can do
 

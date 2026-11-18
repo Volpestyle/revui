@@ -274,7 +274,12 @@ pub fn comment(bundle: &Bundle, link: Option<&str>) -> String {
                 (_, false) => " · reasoned from the code",
             };
             let head = format!("<b>{}</b> · {} · {}", item.id, label(item), defused(&item.title, false).replace('<', "&lt;"));
-            out += &format!("<details><summary>{head}</summary>\n\n{}{how}\n\n{}\n\n</details>\n", at.unwrap_or_default().trim_start_matches(" · "), defused(item.body.trim(), true));
+            let place = format!("{}{how}", at.unwrap_or_default());
+            let place = match place.trim_start_matches(" · ") {
+                "" => String::new(),
+                place => format!("{place}\n\n"),
+            };
+            out += &format!("<details><summary>{head}</summary>\n\n{place}{}\n\n</details>\n", defused(item.body.trim(), true));
         }
     }
     if let Some(run) = crate::html::verify(&bundle.dir) {

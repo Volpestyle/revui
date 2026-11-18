@@ -992,7 +992,7 @@ const actions = { close, fit, save, in: () => scale(1.4), out: () => scale(1 / 1
 media.forEach((one, index) => {
     const open = (event) => { if (event.target.closest('video')) return; show(index); };
     one.addEventListener('click', open);
-    one.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !contents.classList.contains('open')) show(index); });
+    one.addEventListener('keydown', (event) => { if (event.key === 'Enter' && ![contents, statsSheet, help].some((over) => over.classList.contains('open'))) show(index); });
     one.parentElement.querySelector('.expand')?.addEventListener('click', () => show(index));
 });
 viewer.addEventListener('click', (event) => {

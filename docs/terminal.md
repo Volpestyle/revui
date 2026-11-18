@@ -1,0 +1,118 @@
+# revui in your terminal
+
+The whole review without leaving the terminal: your reviews, one card at a time,
+the agent and your editor in tabs. It reads and writes the same guide as the window
+and the one page ([README](../README.md)).
+
+https://github.com/user-attachments/assets/d3760f03-63f3-49e9-87cb-4804cf29262b
+
+<table>
+  <tr>
+    <td width="50%"><img src="list.png" alt="The list of reviews, with one that is done"></td>
+    <td width="50%"><img src="guide.png" alt="The summary card of a review, with a map of where the change sits"></td>
+  </tr>
+  <tr>
+    <td><b>Your reviews.</b> Every link you pasted, the latest first, with where you left off. No repos to configure, nothing loaded until you ask.</td>
+    <td><b>One card at a time, not a wall of diff.</b> The summary, then each part of the change, the core first, with the findings for its code.</td>
+  </tr>
+  <tr>
+    <td><img src="finding.png" alt="A finding with its evidence and a diagram"></td>
+    <td><img src="publish.png" alt="The exact text of a review before it is posted"></td>
+  </tr>
+  <tr>
+    <td><b>Findings with evidence you can judge.</b> Each one says how it was checked: observed in a run, verified by a tool, or reasoned from reading. Screenshots and diagrams sit beside the code.</td>
+    <td><b>Your review, in your words.</b> You see the exact text before anything is posted, and nothing goes out until you confirm.</td>
+  </tr>
+</table>
+
+
+## A review, start to finish
+
+1. **Paste** a merge request or pull request link. The agent starts reviewing.
+2. **Read** one card at a time: `l` goes on, `h` goes back. The summary comes first,
+   then each part of the change with its findings. More arrive while you read.
+3. **Decide.** `a` agrees with a finding and `x` dismisses it. Either way you can
+   add a comment, and `tab` there picks whether the finding is quoted above it. Not convinced?
+   `v` has the agent reproduce it, `i` asks for a screenshot or diagram,
+   and `t` just asks a question.
+4. **Comment** with `c`: on a finding, a line, or a block of lines you dragged over.
+5. **Publish** with `p`: as one comment, one comment plus approval, or a thread
+   per point on the diff.
+
+The agent and your editor open inside revui, so you never leave the review.
+`ctrl-q` switches between them.
+
+## With the agent
+
+Each review has one agent, in a tab. These are real runs against a small demo
+project, sped up where the badge says so.
+
+**Nothing to set up.** With Claude Code and `gh` or `glab` on your machine, the first paste works. `revui setup` is there when you want your own editor, another agent, or agents in a pane of your terminal app.
+
+**Paste a link.** The agent reviews the merge request and writes as it goes: the summary and the parts first, then each finding the moment it has one. `g` does the same for a review that has no guide yet.
+
+https://github.com/user-attachments/assets/db0c578d-f2c5-4297-8176-1e11b26e1390
+
+**Ask about what you are looking at.** `t` goes to the agent, already told which finding you are on. `ctrl-q` switches between the review and the agent.
+
+https://github.com/user-attachments/assets/d4d42fc1-cff1-40e6-bbba-4b965c959d45
+
+**Have a finding reproduced.** `v` asks the agent to run it, off your screen. The first time that needs the product running, the agent asks where: a local stack or a preview deploy for the change, staging or production (read only) for how things are today. It remembers the answer for that repo. Here it starts the project's own server, drops the first response, and confirms that one checkout creates two orders.
+
+https://github.com/user-attachments/assets/9749bb18-5c02-401a-beaa-2140f330ef93
+
+**Ask for a diagram.** `i` has the agent draw one that explains a finding, without running anything. It shows beside the code. What a run showed (output, a screenshot, a recording) comes from `v`, and a finding can carry both.
+
+https://github.com/user-attachments/assets/7d95c89e-b2ea-4b46-8de1-e846889c5336
+
+## Keys
+
+Everything also works with the mouse: every hint on screen is clickable, panes
+resize by dragging, and dragging over text copies it. `/` lists every command
+and `?` explains the screen you are on.
+
+| On your reviews | |
+| --- | --- |
+| paste | start a review of that link |
+| `tab` | type a link, or a few letters to filter |
+| `w` | find the merge requests waiting for your review |
+| `enter` | open the selected review |
+
+| In a review | |
+| --- | --- |
+| `l` `h` | next card, previous card |
+| `b` | list every card and jump to one |
+| `B` | keep the list of every card beside the card |
+| `j` `k`, `tab` | move, switch pane |
+| `a` `x` | agree or dismiss a finding, accept or push back on a decision |
+| `c` `C` | comment on what is under the cursor, or on the whole merge request |
+| `t` `v` `i` | ask the agent, have it verify a finding, have it draw a diagram of one |
+| `o` `O` | open the file or the artifact, or every file in this part |
+| `space` | in the artifact pane, play or pause a recording (needs `ffmpeg`) |
+| `d` `s` | hide the diff, put it beside the detail pane or under it |
+| `u` `U` | page down and up |
+| `p` | publish your review, after a preview |
+| `R` `R` | discard your marks and unpublished comments |
+| `ctrl-q` | switch between the review and the agent |
+| `q` | back |
+
+## In your setup
+
+revui's own tabs need nothing set up. Inside an app that has its own chat, panes or browser, it can use those instead: each is a line or two of config, listed in [config.md](config.md#in-your-app). These are real runs against the demo project, sped up where the badge says so.
+
+**Cursor.** `t` hands the finding to Cursor's own chat, and `o` opens the change in Cursor's diff. `d` hides revui's diff pane, since the editor is right there.
+
+https://github.com/user-attachments/assets/d78a3e39-aff0-4c76-9a5d-83d31e1cd7eb
+
+**Orca.** `v` starts a native Orca chat that reproduces the finding and shows the page in Orca's browser, beside the chat. `o` opens the file in an Orca tab.
+
+https://github.com/user-attachments/assets/8ee486ca-e4ee-4e5a-adbb-9dea72776c7c
+
+**Herdr.** The agent opens in a split pane beside the review, and shows what it ran in Herdr's browser.
+
+https://github.com/user-attachments/assets/4b8be399-284e-4696-b97a-98c791edee8b
+
+**Ghostty.** Pictures draw inline at full resolution. The agent can stay in revui's tabs, or open in a Ghostty split, as here.
+
+https://github.com/user-attachments/assets/7ec04a0f-743d-43d5-a06a-386639fdde8c
+

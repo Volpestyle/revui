@@ -6,49 +6,48 @@
 </p>
 
 <p align="center">
-  Paste a merge request link. An agent reviews it and hands you one finding at a time.<br>
-  You check what matters, and publish your own review.
+  An agent reviews the merge request and writes a guide: the change in parts, each finding with how it was checked.<br>
+  Read it in a window, in a browser, as one page from your pipeline, or in your terminal. You publish your own review.
 </p>
 
-https://github.com/user-attachments/assets/d3760f03-63f3-49e9-87cb-4804cf29262b
+https://github.com/user-attachments/assets/41ec459f-0c9d-4657-9fcf-ac237a80ae73
 
 ## Quick start
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | sh
-revui
+revui <link>
 ```
 
 That installs the latest released binary for macOS or Linux into `~/.local/bin`.
 With Rust, `cargo install --git https://github.com/Volpestyle/revui` builds it instead.
 
 You need the CLI of your code host, signed in (`glab` for GitLab or `gh` for
-GitHub), and a coding agent: Claude Code works with no setup. Then paste the link
-of a merge request or pull request, or start with one: `revui <link>`.
+GitHub), and a coding agent: Claude Code works with no setup.
 
-The agent starts in a tab and reviews the change. The summary lands first, and
-you read it while the findings arrive one by one.
+Paste the link of a merge request or pull request and an agent starts reviewing it.
+The summary lands first, and you read it while the findings arrive one by one.
+`revui <link>` reads it in your terminal. The [window](#in-a-window) and the
+[one page](#as-one-page) read the same review.
 
-## What you get
+## The guide
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/list.png" alt="The list of reviews, with one that is done"></td>
-    <td width="50%"><img src="docs/guide.png" alt="The summary card of a review, with a map of where the change sits"></td>
-  </tr>
-  <tr>
-    <td><b>Your reviews.</b> Every link you pasted, the latest first, with where you left off. No repos to configure, nothing loaded until you ask.</td>
-    <td><b>One card at a time, not a wall of diff.</b> The summary, then each part of the change, the core first, with the findings for its code.</td>
-  </tr>
-  <tr>
-    <td><img src="docs/finding.png" alt="A finding with its evidence and a diagram"></td>
-    <td><img src="docs/publish.png" alt="The exact text of a review before it is posted"></td>
-  </tr>
-  <tr>
-    <td><b>Findings with evidence you can judge.</b> Each one says how it was checked: observed in a run, verified by a tool, or reasoned from reading. Screenshots and diagrams sit beside the code.</td>
-    <td><b>Your review, in your words.</b> You see the exact text before anything is posted, and nothing goes out until you confirm.</td>
-  </tr>
-</table>
+Every review is a guide: a plain folder an agent writes once, and every way of
+reading it shows the same thing.
+
+- **One card at a time, not a wall of diff.** The summary, then each part of the
+  change, the core first, with the findings for its code beside the lines they cite.
+- **Findings with evidence you can judge.** Each one says how it was checked:
+  observed in a run, verified by a tool, or reasoned from reading. Screenshots,
+  recordings and diagrams sit beside the code.
+- **A map of where the change sits.** The components it touches and their
+  neighbours, with what it adds, alters and removes marked. It is cut from a system
+  map of the repo that the agent draws once and keeps for every later review
+  (`revui map <dir>` prints it).
+- **It follows the merge request.** A new push does not start you over. The agent
+  reviews what changed since the head you read, keeps every finding's id and marks
+  the ones that got fixed. Your verdicts come along, and what you already posted is
+  not posted twice.
 
 Two things it will not do:
 
@@ -59,9 +58,11 @@ Two things it will not do:
 
 ## In a window
 
-https://github.com/user-attachments/assets/41ec459f-0c9d-4657-9fcf-ac237a80ae73
-
-The same review in a window, drawn on the GPU by one Rust interface. The keys are the terminal's but for one thing: there are columns here (contents, card, diff, agent), so `h` and `l` move between them and the arrow keys turn the cards. The Mac app shows the list of your reviews and carries the `revui` it needs. `revui web <link>` serves the same interface to your browser, compiled to WebAssembly. Both read and write the same bundle as the terminal, so a review started in one carries on in the other.
+The demo at the top is the window: the contents, the card, the diff and the review's
+agent in columns, drawn on the GPU by one Rust interface. `h` and `l` move between
+the columns, the arrow keys turn the cards, and everything is also a click. The Mac
+app shows the list of your reviews and carries the `revui` it needs. `revui web <link>`
+serves the same interface to your browser, compiled to WebAssembly.
 
 Both are built from a checkout of this repo for now: neither is in the releases yet.
 
@@ -82,6 +83,19 @@ Pictures are inside the file and diagrams are drawn from their source in the rea
 
 <img src="docs/page.png" alt="A finding in the one-page guide: the contents, the card and the diff it cites">
 
+## In your terminal
+
+https://github.com/user-attachments/assets/d3760f03-63f3-49e9-87cb-4804cf29262b
+
+`revui` with no link lists your reviews, and the whole review happens there: the
+agent and your editor open in tabs inside revui, pictures draw inline, and every
+hint on screen is also clickable. It runs in any terminal, and inside Cursor, Orca,
+Herdr, tmux or Ghostty it can use their panes, chat and browser instead of its own
+tabs. [docs/terminal.md](docs/terminal.md) has the keys, the tour and those setups.
+
+All three read and write the same guide, so a review started in one carries on in
+another.
+
 ## From your pipeline
 
 A project can write the guide in CI, so it is there when anyone opens the merge request: in revui, or as that one page, linked from the merge request itself.
@@ -89,102 +103,36 @@ A project can write the guide in CI, so it is there when anyone opens the merge 
     revui ci gitlab     # a job for .gitlab-ci.yml
     revui ci github     # a workflow for .github/workflows/
 
-The reviewer it runs can only read: no shell, nothing it can write, no token for your host. Give the job a way to start your stack and it tests the change there too, and the guide says what it ran and what it saw. [docs/ci.md](docs/ci.md) has the setup.
+The reviewer it runs can only read: no shell, nothing it can write, no token for your host. Give the job a way to start your stack and it tests the change there too, and the guide carries a card for that run: each step and check, opening to its output. [docs/ci.md](docs/ci.md) has the setup.
+
+Two more ways to have a guide waiting, both in [docs/config.md](docs/config.md):
+`revui queue` lists the merge requests waiting for your review, and `revui prepare`
+writes their guides with no one watching, from a scheduler.
 
 ## With an agent
 
-Each review has one agent, in a tab. It writes the review, and it is the one you ask afterwards, so it already knows the change. These are real
-runs against a small demo project, sped up where the badge says so.
+Each review has one agent. It writes the guide, and it is the one you ask
+afterwards, so it already knows the change. In the window it is a panel beside the
+review; in the terminal it is a tab, or a pane of your terminal app.
 
-**Nothing to set up.** With Claude Code and `gh` or `glab` on your machine, the first paste works. `revui setup` is there when you want your own editor, another agent, or agents in a pane of your terminal app.
+- **Ask** about what you are looking at. The agent is told which finding you are on.
+- **Verify** has it reproduce a finding, off your screen. The first time that needs
+  the product running, it asks where: a local stack or a preview deploy for the
+  change, staging or production (read only) for how things are today. It remembers
+  the answer for that repo.
+- **Diagram** has it draw one that explains a finding, without running anything.
 
-**Paste a link.** The agent reviews the merge request and writes as it goes: the summary and the parts first, then each finding the moment it has one. `g` does the same for a review that has no guide yet.
-
-https://github.com/user-attachments/assets/db0c578d-f2c5-4297-8176-1e11b26e1390
-
-**Ask about what you are looking at.** `t` goes to the agent, already told which finding you are on. `ctrl-q` switches between the review and the agent.
-
-https://github.com/user-attachments/assets/d4d42fc1-cff1-40e6-bbba-4b965c959d45
-
-**Have a finding reproduced.** `v` asks the agent to run it, off your screen. The first time that needs the product running, the agent asks where: a local stack or a preview deploy for the change, staging or production (read only) for how things are today. It remembers the answer for that repo. Here it starts the project's own server, drops the first response, and confirms that one checkout creates two orders.
+Here it starts the demo project's own server, drops the first response, and confirms
+that one checkout creates two orders (a real run, sped up where the badge says so):
 
 https://github.com/user-attachments/assets/9749bb18-5c02-401a-beaa-2140f330ef93
 
-**Ask for a diagram.** `i` has the agent draw one that explains a finding, without running anything. It shows beside the code. What a run showed (output, a screenshot, a recording) comes from `v`, and a finding can carry both.
+## Your review
 
-https://github.com/user-attachments/assets/7d95c89e-b2ea-4b46-8de1-e846889c5336
-
-## A review, start to finish
-
-1. **Paste** a merge request or pull request link. The agent starts reviewing.
-2. **Read** one card at a time: `l` goes on, `h` goes back. The summary comes first,
-   then each part of the change with its findings. More arrive while you read.
-3. **Decide.** `a` agrees with a finding and `x` dismisses it. Either way you can
-   add a comment, and `tab` there picks whether the finding is quoted above it. Not convinced?
-   `v` has the agent reproduce it, `i` asks for a screenshot or diagram,
-   and `t` just asks a question.
-4. **Comment** with `c`: on a finding, a line, or a block of lines you dragged over.
-5. **Publish** with `p`: as one comment, one comment plus approval, or a thread
-   per point on the diff.
-
-The agent and your editor open inside revui, so you never leave the review.
-`ctrl-q` switches between them.
-
-## Where the change sits
-
-The summary can open with a map: the components the change touches and their
-neighbours, with what it adds, alters and removes marked. It is cut from a system map
-of the repo that the agent draws once and keeps for every later review
-(`revui map <dir>` prints it), so each guide only draws what moved.
-
-## When the merge request moves on
-
-A new push does not start you over. The agent reviews what changed since the head
-you read, keeps every finding's id and marks the ones that got fixed. Your marks
-come along: a verdict stays on a finding that still reads the same, and what you
-already posted is not posted twice.
-
-## Guides before you ask
-
-- `w` on your reviews lists the merge requests waiting for your review.
-- `revui prepare` writes their guides with no one watching, from a scheduler, so
-  they are there when you sit down.
-- A project's CI can write the guide in its pipeline, and revui picks it up for
-  everyone who opens that merge request. `examples/ci/` has a job for GitLab and
-  one for GitHub.
-
-[docs/config.md](docs/config.md) has the details.
-
-## Keys
-
-Everything also works with the mouse: every hint on screen is clickable, panes
-resize by dragging, and dragging over text copies it. `/` lists every command
-and `?` explains the screen you are on.
-
-| On your reviews | |
-| --- | --- |
-| paste | start a review of that link |
-| `tab` | type a link, or a few letters to filter |
-| `w` | find the merge requests waiting for your review |
-| `enter` | open the selected review |
-
-| In a review | |
-| --- | --- |
-| `l` `h` | next card, previous card |
-| `b` | list every card and jump to one |
-| `B` | keep the list of every card beside the card |
-| `j` `k`, `tab` | move, switch pane |
-| `a` `x` | agree or dismiss a finding, accept or push back on a decision |
-| `c` `C` | comment on what is under the cursor, or on the whole merge request |
-| `t` `v` `i` | ask the agent, have it verify a finding, have it draw a diagram of one |
-| `o` `O` | open the file or the artifact, or every file in this part |
-| `space` | in the artifact pane, play or pause a recording (needs `ffmpeg`) |
-| `d` `s` | hide the diff, put it beside the detail pane or under it |
-| `u` `U` | page down and up |
-| `p` | publish your review, after a preview |
-| `R` `R` | discard your marks and unpublished comments |
-| `ctrl-q` | switch between the review and the agent |
-| `q` | back |
+Agree with a finding or dismiss it, and comment on a finding, a line or a block of
+lines. Publishing shows the exact text first, then posts it as one comment, one
+comment plus approval, or a thread per point on the diff. Nothing goes out until you
+confirm.
 
 ## Works with
 
@@ -193,36 +141,17 @@ and `?` explains the screen you are on.
 | **Code hosts** | GitLab through `glab`, GitHub through `gh` |
 | **Coding agents** | Claude Code out of the box, or any agent you can start from a command |
 | **Editors** | Neovim, VS Code, or anything else that opens a file from a command |
+| **Where you read it** | The Mac app, a browser, one HTML page, or any terminal |
 | **Terminals** | Any. Images show inline with Kitty, Sixel or iTerm2 graphics, and as block characters elsewhere |
 | **Where agents open** | A tab inside revui, with nothing to set up. Or a pane of yours: tmux, Herdr, Orca, zellij, anything that opens a pane from a command |
 
 Agents, editors and panes are not built-in integrations: each is one command in the config. `revui setup` has your agent look at your machine, ask where things should open, and write those commands for you.
 
-## In your setup
-
-revui's own tabs need nothing set up. Inside an app that has its own chat, panes or browser, it can use those instead: each is a line or two of config, listed in [docs/config.md](docs/config.md#in-your-app). These are real runs against the demo project, sped up where the badge says so.
-
-**Cursor.** `t` hands the finding to Cursor's own chat, and `o` opens the change in Cursor's diff. `d` hides revui's diff pane, since the editor is right there.
-
-https://github.com/user-attachments/assets/d78a3e39-aff0-4c76-9a5d-83d31e1cd7eb
-
-**Orca.** `v` starts a native Orca chat that reproduces the finding and shows the page in Orca's browser, beside the chat. `o` opens the file in an Orca tab.
-
-https://github.com/user-attachments/assets/8ee486ca-e4ee-4e5a-adbb-9dea72776c7c
-
-**Herdr.** The agent opens in a split pane beside the review, and shows what it ran in Herdr's browser.
-
-https://github.com/user-attachments/assets/4b8be399-284e-4696-b97a-98c791edee8b
-
-**Ghostty.** Pictures draw inline at full resolution. The agent can stay in revui's tabs, or open in a Ghostty split, as here.
-
-https://github.com/user-attachments/assets/7ec04a0f-743d-43d5-a06a-386639fdde8c
-
 ## Configuration
 
 There is nothing you have to configure. `~/.config/revui/config.json` is for
-changing a default: `,` inside revui opens it, `revui doctor` checks it, and
-`revui setup` has an agent write it for you.
+changing a default: `revui doctor` checks it, and `revui setup` has an agent write
+it for you.
 
 Your editor, your agent and where each opens are one command apiece. See
 [docs/config.md](docs/config.md) for every key.
@@ -231,8 +160,9 @@ Your editor, your agent and where each opens are one command apiece. See
 
 ```mermaid
 flowchart LR
-    A["An agent<br>(the bundled skill, yours, or CI)"] -- writes --> B["A bundle<br>review.json, the patch, assets"]
-    B -- read by --> C["revui"]
+    A["An agent<br>(the bundled skill, yours, or CI)"] -- writes --> B["A guide<br>review.json, the patch, assets"]
+    B -- read by --> C["revui<br>window, browser, terminal"]
+    B -- "revui html" --> F["guide.html<br>one page, read-only"]
     C -- "your marks and comments" --> D["state.json<br>on your machine"]
     C -- "publish, after you confirm" --> E["GitLab or GitHub"]
 ```
@@ -242,10 +172,11 @@ A guide is a plain directory. revui only reads it, so anything can write one:
 
     revui                 paste a link, or pick up an earlier review
     revui <url>           start, or pick up, the review of that merge request
-    revui <dir>           open a bundle directly
-    revui fetch <url>     make or find the bundle for one, without opening it
-    revui queue           list the merge requests waiting for your review
-    revui prepare         write the guides those are missing, with no one watching
+    revui <dir>           open a guide directly
+    revui web <url>       the same review in a browser
+    revui html <dir>      write it as one page
+    revui ci gitlab       print a pipeline job that writes the guide
+    revui prepare         write the guides you are waiting on, with no one watching
     revui help            every command
 
 <sub>The wordmark is set in <a href="https://vercel.com/font">Geist Mono</a> (OFL-1.1).</sub>

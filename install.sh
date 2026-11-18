@@ -1,7 +1,8 @@
 #!/bin/sh
 # Installs the latest released revui binary. No Rust needed.
 #   curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | sh
-# REVUI_INSTALL_DIR picks the folder (default ~/.local/bin). REVUI_DOWNLOAD picks where the archives are read from.
+# REVUI_INSTALL_DIR picks the folder (default ~/.local/bin). REVUI_VERSION picks a release (v0.2.3; default the latest).
+# REVUI_DOWNLOAD picks where the archives are read from.
 set -eu
 
 repo="Volpestyle/revui"
@@ -16,7 +17,9 @@ case "$(uname -s)-$(uname -m)" in
     ;;
 esac
 
-from="${REVUI_DOWNLOAD:-https://github.com/$repo/releases/latest/download}"
+latest="https://github.com/$repo/releases/latest/download"
+from="${REVUI_DOWNLOAD:-${REVUI_VERSION:+https://github.com/$repo/releases/download/$REVUI_VERSION}}"
+from="${from:-$latest}"
 into="${REVUI_INSTALL_DIR:-$HOME/.local/bin}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

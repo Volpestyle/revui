@@ -25,10 +25,12 @@ revui-guide:
     # Enough history to find where the branch left its target.
     GIT_DEPTH: "200"
     CLAUDE_CODE_VERSION: "2.1.326"
+    # The release this job runs. A newer revui reaches your pipeline when you change this line, not before.
+    REVUI_VERSION: "REVUI_RELEASE"
   before_script:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq chromium >/dev/null
     - npm install -g --silent "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
-    - curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | REVUI_INSTALL_DIR=/usr/local/bin sh
+    - curl -fsSL "https://raw.githubusercontent.com/Volpestyle/revui/$REVUI_VERSION/install.sh" | REVUI_INSTALL_DIR=/usr/local/bin sh
     # Chromium refuses to start as root with its sandbox on; the job's container is the sandbox here.
     - printf '#!/bin/sh\nexec chromium --no-sandbox "$@"\n' >/usr/local/bin/chromium-ci && chmod +x /usr/local/bin/chromium-ci
     - export REVUI_CHROME=/usr/local/bin/chromium-ci

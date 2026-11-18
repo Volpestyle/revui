@@ -61,6 +61,23 @@ Take the parts in order. For each, read its changed files whole, not only their 
 - Note what the change does well where it is worth knowing, and any choice it made that the ticket did not ask for.
 - Leave out taste, and anything that was already there before this change.
 
+### A second reader, who has not read the description
+
+By now you have read the description and the ticket, and they argue for the change: its trade-offs read as settled. So have the hunt for what it breaks done by a reader who has seen neither, and start it before your own close read so it runs while you work.
+
+- Your agent's own review command, when it has one (Claude Code: `/code-review`), pointed at the checkout of the head and the range from the target branch. Name both: left alone it reviews whatever directory the session is in.
+- Otherwise a subagent with a fresh context, given the diff, the files at the head and the questions below, and nothing you wrote.
+- With neither, ask the questions yourself before you credit the change with anything.
+
+What comes back is a list of places to look, not findings. Check each against the code at the head, and drop what the ticket already tracks, what the author already said, and what was there before. For each behaviour the diff changes, against the code before:
+
+- What used to fail at once and now waits, retries or holds something (a connection, a lock, a place in a queue)? Follow the slow case and the silent one.
+- What does a new retry, cache or fallback do where it was not written for: the first attempt, a call that is not safe to repeat?
+- Which new guard, option or parameter can never be reached, given what its callers pass?
+- Do the new tests run the changed code against something real, or pass whether or not it works?
+- What does the change make untrue: a doc, a log line, an alert, a name something else looks for? Search the repo for the old one.
+- What does it leave with no caller, or add that nothing uses?
+
 **Write each finding to `review.json` the moment you have it**, then go on. Do not hold findings back to sort or polish them: the person reads the first while you look for the second. When you move to the next part, update `working`.
 
 - **Ids**: by severity, numbered as they are found: `B1`, `F1`, `S1`, `Q1`, with `severity` set to exactly `blocker`, `fix`, `suggestion` or `question` (the format allows any text; guides written with this skill use these four). Good calls are `G1`, `G2`, with no `severity`. An id never changes once it is in the file.

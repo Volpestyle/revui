@@ -20,6 +20,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # The jobs revui prints install the release named in Cargo.toml: a tag that disagrees would point them nowhere.
+      - run: grep -qx "version = \"${GITHUB_REF_NAME#v}\"" Cargo.toml
+        shell: bash
       - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - run: tar -czf revui-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release revui

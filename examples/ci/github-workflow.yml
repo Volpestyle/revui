@@ -34,6 +34,8 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       CLAUDE_CODE_VERSION: "2.1.326"
+      # The release this job runs. A newer revui reaches your pipeline when you change this line, not before.
+      REVUI_VERSION: "REVUI_RELEASE"
     steps:
       # The pull request's own head, with its history, not the merge commit GitHub makes for it.
       - uses: actions/checkout@v4
@@ -41,7 +43,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - run: npm install -g --silent "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
-      - run: curl -fsSL https://raw.githubusercontent.com/Volpestyle/revui/main/install.sh | REVUI_INSTALL_DIR=/usr/local/bin sudo -E sh
+      - run: curl -fsSL "https://raw.githubusercontent.com/Volpestyle/revui/$REVUI_VERSION/install.sh" | REVUI_INSTALL_DIR=/usr/local/bin sudo -E sh
       - run: |
           revui ci script >"$RUNNER_TEMP/guide.sh"
           bash "$RUNNER_TEMP/guide.sh"

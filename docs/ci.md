@@ -22,8 +22,9 @@ Claude subscription, `CLAUDE_CODE_OAUTH_TOKEN`, which `claude setup-token` print
 variable on GitLab or a secret on GitHub. That is all it needs. Keep the job's name,
 `revui-guide`: it is what revui looks for.
 
-The job installs revui and Claude Code, runs `revui ci script`, and keeps the folder
-`revui-guide/` as its artifact:
+The job installs the revui release that printed it (`REVUI_VERSION` in the job) and
+Claude Code, both pinned: change the line to move to a newer one. It then runs
+`revui ci script`, and keeps the folder `revui-guide/` as its artifact:
 
     review.json, mr.patch, assets/   the bundle revui reads
     guide.html                       the page
@@ -82,9 +83,23 @@ All of these are optional. The files are read from the target branch.
 | What | How |
 | --- | --- |
 | Your own review rules | `REVIEW.md` at the root of the repo (`GUIDE_RULES` names another file). They add to the reviewer's own, and win where they are stricter. |
+| Where features live | A table in those rules: the feature, the folder to start in, the doc that explains it, what else it touches (below). |
 | A map of your system | `docs/system-map.mmd`, a Mermaid flowchart of the components and who calls whom (`GUIDE_MAP` names another file). Each guide's map is cut from it. [FORMAT.md](../FORMAT.md) says what it holds. |
 | Tickets | `GUIDE_MCP`, a Claude Code MCP config as JSON, and `GUIDE_MCP_TOOLS`, the tools of it the reviewer may call. Name only tools that read. |
 | The model | `GUIDE_MODEL` (default `opus`), `GUIDE_EFFORT`, and `GUIDE_TIMEOUT` in seconds for each call (default 900). |
+
+A feature table saves the reviewer from finding its way around a large repo on every
+run, and points it at docs it would not have opened. Keep it to folders, which move
+less than files, and name the doc and do not copy it:
+
+    | Feature | Start in | Doc | Touches |
+    | --- | --- | --- | --- |
+    | Checkout | `api/orders/`, `web/checkout/` | `docs/orders.md` | the payments provider |
+    | Sign-in | `api/auth/` | `docs/auth.md` | the session store |
+    | Order events | `consumers/orders/`, `infra/bus.tf` | none | the warehouse's queue |
+
+It differs from the system map, which is a drawing of components and who calls whom:
+the guide's own map is cut from that one, and the table is only for the reviewer.
 
 Tickets from Linear, for example, with `LINEAR_API_KEY` set as a masked variable:
 

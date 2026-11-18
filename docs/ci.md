@@ -17,7 +17,8 @@ anyone opens the change:
     revui ci gitlab     # prints a job: add it to .gitlab-ci.yml
     revui ci github     # prints a workflow: save it as .github/workflows/revui-guide.yml
 
-Then give the job a key for the reviewer: `ANTHROPIC_API_KEY`, as a masked CI/CD
+Then give the job a key for the reviewer: `ANTHROPIC_API_KEY` (or, to run it on a
+Claude subscription, `CLAUDE_CODE_OAUTH_TOKEN`, which `claude setup-token` prints), as a masked CI/CD
 variable on GitLab or a secret on GitHub. That is all it needs. Keep the job's name,
 `revui-guide`: it is what revui looks for.
 

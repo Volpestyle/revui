@@ -3,7 +3,7 @@
 # Anyone who then opens the merge request in revui gets that guide instead of starting a review.
 #
 # Add this job to .gitlab-ci.yml (the job name is what revui looks for) and set one masked CI/CD variable:
-#   ANTHROPIC_API_KEY   for the reviewer
+#   ANTHROPIC_API_KEY   for the reviewer (or CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token`, for a subscription)
 # and, to have the guide posted on the merge request as one comment, replaced on each push:
 #   GUIDE_POST_TOKEN    a project access token with the api scope and the Reporter role. Its name is the commenter's
 #

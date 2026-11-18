@@ -23,7 +23,8 @@ That installs the latest released binary for macOS or Linux into `~/.local/bin`.
 With Rust, `cargo install --git https://github.com/Volpestyle/revui` builds it instead.
 
 You need the CLI of your code host, signed in (`glab` for GitLab or `gh` for
-GitHub), and a coding agent: Claude Code works with no setup.
+GitHub), and a coding agent: Claude Code works with no setup, on an API key or a
+Claude subscription.
 
 Paste the link of a merge request or pull request and an agent starts reviewing it.
 The summary lands first, and you read it while the findings arrive one by one.
@@ -81,7 +82,9 @@ Both are built from a checkout of this repo for now: neither is in the releases 
 
 Pictures are inside the file and diagrams are drawn from their source in the reader's light or dark theme. A recording plays from its file beside the page.
 
-<img src="docs/page.png" alt="A finding in the one-page guide: the contents, the card and the diff it cites">
+The same page by keyboard, then by mouse:
+
+https://github.com/user-attachments/assets/f918be5f-16b2-4257-ad21-d70e205ce6d2
 
 ## In your terminal
 
@@ -102,6 +105,8 @@ A project can write the guide in CI, so it is there when anyone opens the merge 
 
     revui ci gitlab     # a job for .gitlab-ci.yml
     revui ci github     # a workflow for .github/workflows/
+
+Add the file and one secret: an API key, or the token `claude setup-token` prints to run it on a Claude subscription. On GitHub that is all: the guide is posted on each pull request as one comment, replaced on every push. On GitLab it is posted once you give the job a project access token.
 
 The reviewer it runs can only read: no shell, nothing it can write, and it never holds the token that posts the comment. Give the job a way to start your stack and it tests the change there too, and the guide carries a card for that run: each step and check, opening to its output. [docs/ci.md](docs/ci.md) has the setup.
 

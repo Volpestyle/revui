@@ -17,7 +17,8 @@ anyone opens the change:
     revui ci gitlab     # prints a job: add it to .gitlab-ci.yml
     revui ci github     # prints a workflow: save it as .github/workflows/revui-guide.yml
 
-Then give the job a key for the reviewer: `ANTHROPIC_API_KEY`, as a masked CI/CD
+Then give the job a key for the reviewer: `ANTHROPIC_API_KEY` (or, to run it on a
+Claude subscription, `CLAUDE_CODE_OAUTH_TOKEN`, which `claude setup-token` prints), as a masked CI/CD
 variable on GitLab or a secret on GitHub. That is all it needs. Keep the job's name,
 `revui-guide`: it is what revui looks for.
 
@@ -47,7 +48,9 @@ run that holds the artifact on GitHub. `GUIDE_LINK` names another address.
 What is posted is text a model wrote, under a token that may act on the merge request,
 so `revui ci comment` makes it inert first: a line that opens with `/` would be a
 command on GitLab (`/approve`, `/close`) and `@name` would notify that person, and
-neither survives. `revui ci comment <dir>` prints the comment without posting it.
+neither survives. Code is left exactly as written, in a fenced block or in backticks,
+so what you copy out of a finding is what the reviewer wrote; where it is unclear
+whether something is code, it is treated as prose. `revui ci comment <dir>` prints the comment without posting it.
 
 ## What the reviewer can do
 

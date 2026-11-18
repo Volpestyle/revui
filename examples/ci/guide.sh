@@ -26,6 +26,13 @@
 set -euo pipefail
 
 model=${GUIDE_MODEL:-${ANTHROPIC_MODEL:-opus}}
+# A secret that is not set reaches the job as an empty variable, which Claude Code would take for a key.
+[[ -n ${ANTHROPIC_API_KEY:-} ]] || unset ANTHROPIC_API_KEY
+[[ -n ${CLAUDE_CODE_OAUTH_TOKEN:-} ]] || unset CLAUDE_CODE_OAUTH_TOKEN
+if [[ -z ${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}${CLAUDE_CODE_USE_BEDROCK:-}${CLAUDE_CODE_USE_VERTEX:-} ]]; then
+  echo 'The reviewer has nothing to sign in with: set ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, for a Claude subscription).' >&2
+  exit 1
+fi
 # Taken out of the environment here, so nothing this script starts (the reviewer least of all) is handed it.
 post_token=${GUIDE_POST_TOKEN:-}
 unset GUIDE_POST_TOKEN

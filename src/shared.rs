@@ -184,20 +184,64 @@ pub const COMMENT_MARK: &str = "<!-- revui-guide -->";
 
 /// Text from a model, made safe to post under a bot's name: a line that opens with `/` is a command on GitLab
 /// (`/approve`, `/close`) and `@name` notifies that person, so each gets a zero-width space that stops it being read as one.
-fn defused(text: &str) -> String {
-    let mut out = String::new();
-    for (n, line) in text.lines().enumerate() {
-        if n > 0 {
-            out.push('\n');
+/// With `code`, what the host shows as code is left as written, since neither works there and a hidden character
+/// would break whatever is copied out of it. Only code that cannot be read any other way counts: a fence that opens
+/// after a blank line and closes at the next line of backticks, and a span on one line with no stray backtick before
+/// it in its paragraph. A `<` or a backslash in prose ends that for the rest of the text: raw HTML and escapes let a
+/// host read backticks as text. Anything else is treated as prose.
+fn defused(text: &str, code: bool) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let fence = |line: &str| {
+        let ticks = line.len() - line.trim_start_matches('`').len();
+        (ticks >= 3 && !line[ticks..].contains('`')).then_some(ticks)
+    };
+    let closes = |line: &str, ticks: usize| line.trim_end().len() >= ticks && line.trim_end().chars().all(|c| c == '`');
+    let mut out = Vec::new();
+    let (mut n, mut stray, mut html) = (0, false, false);
+    while n < lines.len() {
+        let line = lines[n];
+        let after_blank = n == 0 || lines[n - 1].trim().is_empty();
+        let next = |ticks| (n + 1..lines.len()).find(|&m| lines[m].starts_with("```")).filter(|&m| closes(lines[m], ticks));
+        if let Some(end) = fence(line).filter(|_| code && after_blank && !html).and_then(next) {
+            out.extend(lines[n..=end].iter().map(|line| line.to_string()));
+            (n, stray) = (end + 1, false);
+            continue;
         }
+        stray &= !line.trim().is_empty();
         let indent = line.len() - line.trim_start().len();
-        out += &line[..indent];
+        let mut safe = line[..indent].to_string();
         if line[indent..].starts_with('/') {
-            out.push('\u{200b}');
+            safe.push('\u{200b}');
         }
-        out += &line[indent..].replace('@', "@\u{200b}");
+        let mut rest = &line[indent..];
+        while !rest.is_empty() {
+            let prose = &rest[..rest.find('`').unwrap_or(rest.len())];
+            html |= prose.contains(['<', '\\']);
+            safe += &prose.replace('@', "@\u{200b}");
+            rest = &rest[prose.len()..];
+            if !code || stray || html {
+                safe += &rest.replace('@', "@\u{200b}");
+                break;
+            }
+            let ticks = rest.len() - rest.trim_start_matches('`').len();
+            let mut from = ticks;
+            let close = loop {
+                let Some(at) = rest[from..].find('`').map(|at| from + at) else { break None };
+                let run = rest[at..].len() - rest[at..].trim_start_matches('`').len();
+                if run == ticks {
+                    break Some(at + run);
+                }
+                from = at + run;
+            };
+            stray = close.is_none() && ticks > 0;
+            let taken = close.unwrap_or(ticks);
+            safe += &rest[..taken];
+            rest = &rest[taken..];
+        }
+        out.push(safe);
+        n += 1;
     }
-    out
+    out.join("\n")
 }
 
 /// The guide as one comment a pipeline posts on the merge request: the summary, then each finding folded under its
@@ -205,7 +249,7 @@ fn defused(text: &str) -> String {
 pub fn comment(bundle: &Bundle, link: Option<&str>) -> String {
     let review = &bundle.review;
     let source = review.sources.first();
-    let mut out = format!("{COMMENT_MARK}\n### Guided review\n\n{}\n", defused(review.summary.trim()));
+    let mut out = format!("{COMMENT_MARK}\n### Guided review\n\n{}\n", defused(review.summary.trim(), true));
     let label = |item: &Item| match item.kind {
         Kind::Good => "good".to_string(),
         Kind::Decision => "decision".to_string(),
@@ -217,7 +261,7 @@ pub fn comment(bundle: &Bundle, link: Option<&str>) -> String {
         if items.is_empty() {
             continue;
         }
-        out += &format!("\n**{}. {}**\n\n", n + 1, defused(&section.title));
+        out += &format!("\n**{}. {}**\n\n", n + 1, defused(&section.title, false));
         for item in items {
             let at = item.at.as_ref().map(|at| {
                 let place = format!("`{}:{}`", at.file, at.line);
@@ -229,8 +273,8 @@ pub fn comment(bundle: &Bundle, link: Option<&str>) -> String {
                 (_, true) => " · checked in a run",
                 (_, false) => " · reasoned from the code",
             };
-            let head = format!("<b>{}</b> · {} · {}", item.id, label(item), defused(&item.title).replace('<', "&lt;"));
-            out += &format!("<details><summary>{head}</summary>\n\n{}{how}\n\n{}\n\n</details>\n", at.unwrap_or_default().trim_start_matches(" · "), defused(item.body.trim()));
+            let head = format!("<b>{}</b> · {} · {}", item.id, label(item), defused(&item.title, false).replace('<', "&lt;"));
+            out += &format!("<details><summary>{head}</summary>\n\n{}{how}\n\n{}\n\n</details>\n", at.unwrap_or_default().trim_start_matches(" · "), defused(item.body.trim(), true));
         }
     }
     if let Some(run) = crate::html::verify(&bundle.dir) {

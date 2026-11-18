@@ -1854,9 +1854,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // What a pipeline needs to write a guide, kept with the revui that reads it: the job's script, what the
         // reviewer is told, what it is told beside a running sandbox, and the recorder for a sandbox's own steps.
+        (Some("ci"), Some(which)) if which == "comment" => {
+            let dir = args.get(2).ok_or("usage: revui ci comment <dir> [link to the guide]")?;
+            return Ok(print!("{}", shared::comment(&Bundle::load(Path::new(dir))?, args.get(3).map(String::as_str))));
+        }
         (Some("ci"), Some(which)) => {
             let files = [("script", include_str!("../examples/ci/guide.sh")), ("prompt", include_str!("../examples/ci/guide.md")), ("sandbox", include_str!("../examples/ci/sandbox.md")), ("verify", include_str!("../examples/ci/verify.sh")), ("gitlab", include_str!("../examples/ci/gitlab-ci.yml")), ("github", include_str!("../examples/ci/github-workflow.yml"))];
-            let (_, text) = files.iter().find(|(name, _)| name == which).ok_or("usage: revui ci script|prompt|sandbox|verify|gitlab|github")?;
+            let (_, text) = files.iter().find(|(name, _)| name == which).ok_or("usage: revui ci script|prompt|sandbox|verify|gitlab|github, or revui ci comment <dir> [link]")?;
             return Ok(print!("{text}"));
         }
         (Some("html"), Some(dir)) => return Ok(println!("{}", html::write(Path::new(dir), args.get(2))?.display())),
@@ -2023,7 +2027,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui prepare [mr url]  write the guides those are missing, or that one's, with no one watching\n\
                  revui hunks <dir>       list the diff's files and hunk indexes\n\
                  revui web <dir | mr url>   the same review in a browser, drawn on the GPU (needs the interface built in a checkout: cd gpu && trunk build --release)\n\
-                 revui ci gitlab|github  print a pipeline job that writes the guide for every merge request (docs/ci.md); script, prompt, sandbox and verify print what it runs\n\
+                 revui ci gitlab|github  print a pipeline job that writes the guide for every merge request (docs/ci.md); script, prompt, sandbox and verify print what it runs, and comment <dir> the comment it posts\n\
                  revui html <dir> [out]  write the review as one page, guide.html, that any browser opens with no revui: an artifact a pipeline keeps, or a file to send\n\
                  revui json <dir>        print the review, its diff, your marks and what would go out, for another front end\n\
                  revui state <dir>       save your marks, read as JSON from stdin\n\

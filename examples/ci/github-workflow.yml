@@ -1,5 +1,5 @@
-# Writes a revui guide for every pull request, as an artifact named revui-guide: the bundle revui reads, and
-# guide.html, the same review as one page anyone can open.
+# Writes a revui guide for every pull request and posts it there as one comment, replaced on each push. The run
+# keeps an artifact named revui-guide: the bundle revui reads, and guide.html, the same review as one page.
 # Anyone who then opens the pull request in revui gets that guide instead of starting a review.
 #
 # Copy to .github/workflows/revui-guide.yml and add the secret ANTHROPIC_API_KEY.
@@ -15,6 +15,8 @@ on:
 
 permissions:
   contents: read
+  # For the comment. Remove this and GUIDE_POST_TOKEN below to write the guide without posting it.
+  pull-requests: write
 
 concurrency:
   group: revui-guide-${{ github.event.pull_request.number }}
@@ -41,6 +43,9 @@ jobs:
       - run: |
           revui ci script >"$RUNNER_TEMP/guide.sh"
           bash "$RUNNER_TEMP/guide.sh"
+        env:
+          # Only the script's last step uses it: the reviewer never sees it.
+          GUIDE_POST_TOKEN: ${{ github.token }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

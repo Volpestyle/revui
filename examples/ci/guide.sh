@@ -16,6 +16,9 @@
 #   GUIDE_MAP            file with the system map as Mermaid, read from the target branch (default: docs/system-map.mmd)
 #   GUIDE_MCP            a Claude Code MCP config, as JSON, for a ticket tracker the reviewer may read
 #   GUIDE_MCP_TOOLS      the tools of it the reviewer may call, separated by commas (read-only ones)
+#   GUIDE_POST_TOKEN    a token that may comment on the merge request: the guide is then posted there as one
+#                        comment, replaced on each run. Unset, nothing is posted
+#   GUIDE_LINK           where that comment says the whole guide opens (default: this job's artifact or run)
 #   GUIDE_SANDBOX        directory of a sandbox run (verify.json and its logs, as `revui ci verify` writes them). Set
 #                        when the change is running on this machine: the reviewer gets a shell and tests against it
 #   GUIDE_SANDBOX_NOTES  file saying what is running and how to reach it, read from the target branch
@@ -23,6 +26,9 @@
 set -euo pipefail
 
 model=${GUIDE_MODEL:-${ANTHROPIC_MODEL:-opus}}
+# Taken out of the environment here, so nothing this script starts (the reviewer least of all) is handed it.
+post_token=${GUIDE_POST_TOKEN:-}
+unset GUIDE_POST_TOKEN
 sandbox=${GUIDE_SANDBOX:-}
 tools='Read,Grep,Glob'
 [[ -n $sandbox ]] && tools+=',Bash'
@@ -221,3 +227,36 @@ fi
 
 rm -f "$bundle/review.empty.json"
 revui html "$bundle"
+
+# Posts the guide on the merge request as one comment under the token's name, and replaces that comment on the next
+# run. A failure here is reported and nothing more: the guide is already written.
+post() {
+  local api list found body link
+  local -a auth
+  if [[ -n ${GITHUB_EVENT_PATH:-} ]]; then
+    api="$GITHUB_API_URL/repos/$repo"
+    list="$api/issues/${reference#\#}/comments"
+    auth=(-H "Authorization: Bearer $post_token" -H 'Accept: application/vnd.github+json')
+    link=${GUIDE_LINK:-$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID}
+  else
+    api="$CI_API_V4_URL/projects/$CI_MERGE_REQUEST_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID"
+    list="$api/notes"
+    auth=(-H "PRIVATE-TOKEN: $post_token")
+    link=${GUIDE_LINK:-$CI_JOB_URL/artifacts/file/${bundle#"$CI_PROJECT_DIR"/}/guide.html}
+  fi
+  revui ci comment "$bundle" "$link" >"$bundle/comment.md"
+  body=$(jq -Rs '{body: .}' "$bundle/comment.md")
+  # ponytail: looks for its own comment in one page of a hundred; page through them if merge requests outgrow that
+  found=$(curl -fsS "${auth[@]}" "$list?per_page=100&sort=desc&direction=desc" |
+    jq -r 'map(select(.body | startswith("<!-- revui-guide -->"))) | max_by(.id) | .id // empty')
+  if [[ -z $found ]]; then
+    curl -fsS -o /dev/null "${auth[@]}" -H 'Content-Type: application/json' -d "$body" "$list"
+  elif [[ -n ${GITHUB_EVENT_PATH:-} ]]; then
+    curl -fsS -o /dev/null -X PATCH "${auth[@]}" -H 'Content-Type: application/json' -d "$body" "$api/issues/comments/$found"
+  else
+    curl -fsS -o /dev/null -X PUT "${auth[@]}" -H 'Content-Type: application/json' -d "$body" "$list/$found"
+  fi
+}
+if [[ -n $post_token ]]; then
+  post || echo 'The guide was written but could not be posted on the merge request.' >&2
+fi

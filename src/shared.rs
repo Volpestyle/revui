@@ -179,6 +179,79 @@ pub fn mark_published(bundle: &Bundle, state: &mut State, choice: usize) {
     let _ = bundle.save_state(state);
 }
 
+/// The mark a pipeline's comment carries, so the next run finds it and replaces it where a new one would pile up.
+pub const COMMENT_MARK: &str = "<!-- revui-guide -->";
+
+/// Text from a model, made safe to post under a bot's name: a line that opens with `/` is a command on GitLab
+/// (`/approve`, `/close`) and `@name` notifies that person, so each gets a zero-width space that stops it being read as one.
+fn defused(text: &str) -> String {
+    let mut out = String::new();
+    for (n, line) in text.lines().enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        let indent = line.len() - line.trim_start().len();
+        out += &line[..indent];
+        if line[indent..].starts_with('/') {
+            out.push('\u{200b}');
+        }
+        out += &line[indent..].replace('@', "@\u{200b}");
+    }
+    out
+}
+
+/// The guide as one comment a pipeline posts on the merge request: the summary, then each finding folded under its
+/// title. `link` is where the whole guide opens.
+pub fn comment(bundle: &Bundle, link: Option<&str>) -> String {
+    let review = &bundle.review;
+    let source = review.sources.first();
+    let mut out = format!("{COMMENT_MARK}\n### Guided review\n\n{}\n", defused(review.summary.trim()));
+    let label = |item: &Item| match item.kind {
+        Kind::Good => "good".to_string(),
+        Kind::Decision => "decision".to_string(),
+        Kind::Finding if item.severity.is_empty() => "finding".to_string(),
+        Kind::Finding => item.severity.clone(),
+    };
+    for (n, section) in review.sections.iter().enumerate() {
+        let items: Vec<&Item> = review.items.iter().filter(|item| item.section == Some(n)).collect();
+        if items.is_empty() {
+            continue;
+        }
+        out += &format!("\n**{}. {}**\n\n", n + 1, defused(&section.title));
+        for item in items {
+            let at = item.at.as_ref().map(|at| {
+                let place = format!("`{}:{}`", at.file, at.line);
+                let url = source.and_then(|source| mrs::file_url(&source.url, &source.head_sha, &at.file, at.line));
+                url.map_or(format!(" · {place}"), |url| format!(" · [{place}]({url})"))
+            });
+            let how = match (item.kind, item.evidence.iter().any(|one| !matches!(one.provenance, crate::bundle::Provenance::Inferred))) {
+                (Kind::Good, _) => "",
+                (_, true) => " · checked in a run",
+                (_, false) => " · reasoned from the code",
+            };
+            let head = format!("<b>{}</b> · {} · {}", item.id, label(item), defused(&item.title).replace('<', "&lt;"));
+            out += &format!("<details><summary>{head}</summary>\n\n{}{how}\n\n{}\n\n</details>\n", at.unwrap_or_default().trim_start_matches(" · "), defused(item.body.trim()));
+        }
+    }
+    if let Some(run) = crate::html::verify(&bundle.dir) {
+        let steps = run["steps"].as_array().map_or(0, Vec::len) + run["checks"].as_array().map_or(0, Vec::len);
+        let failed = ["steps", "checks"].iter().flat_map(|key| run[key].as_array().into_iter().flatten()).filter(|one| one["ok"] == false).count();
+        out += &format!("\nThe change was run in a sandbox: {steps} steps and checks, {failed} failed.\n");
+    }
+    let head = source.map_or("", |source| &source.head_sha[..source.head_sha.len().min(8)]);
+    out += &format!("\n---\n<sub>{}Written for `{head}` by an agent in this pipeline, as a first pass. A person still owns the review.</sub>\n", link.map_or(String::new(), |link| format!("[Open the whole guide]({link}) · ")));
+    // ponytail: GitHub refuses a comment over 65536 characters; cut there and point at the guide. Per-finding comments if guides outgrow it.
+    if out.len() > 60000 {
+        let mut end = 60000;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+        out += "\n\n</details>\n\nCut short here: the whole guide has the rest.\n";
+    }
+    out
+}
+
 /// What an agent is told. `place` is the file and line the person is on, `picked` the claims they ticked.
 pub fn prompt(bundle: &Bundle, mode: Mode, fresh: bool, item: Option<&Item>, place: (&str, u32), section: Option<&Section>, picked: &[String]) -> String {
     let url = bundle.review.sources.first().map_or("", |s| s.url.as_str());

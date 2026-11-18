@@ -98,12 +98,12 @@ another.
 
 ## From your pipeline
 
-A project can write the guide in CI, so it is there when anyone opens the merge request: in revui, or as that one page, linked from the merge request itself.
+A project can write the guide in CI, so it is there when anyone opens the merge request: as a comment a bot posts on it, in revui, or as that one page.
 
     revui ci gitlab     # a job for .gitlab-ci.yml
     revui ci github     # a workflow for .github/workflows/
 
-The reviewer it runs can only read: no shell, nothing it can write, no token for your host. Give the job a way to start your stack and it tests the change there too, and the guide carries a card for that run: each step and check, opening to its output. [docs/ci.md](docs/ci.md) has the setup.
+The reviewer it runs can only read: no shell, nothing it can write, and it never holds the token that posts the comment. Give the job a way to start your stack and it tests the change there too, and the guide carries a card for that run: each step and check, opening to its output. [docs/ci.md](docs/ci.md) has the setup.
 
 Two more ways to have a guide waiting, both in [docs/config.md](docs/config.md):
 `revui queue` lists the merge requests waiting for your review, and `revui prepare`

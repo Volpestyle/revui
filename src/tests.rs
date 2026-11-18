@@ -660,3 +660,16 @@ fn another_front_end_reads_the_review_and_cannot_post_without_a_merge_request() 
     assert!(shared::preview(&bundle, &state).contains("> **A retry can create the order twice**"), "an agreed finding goes out quoted");
     assert!(shared::posting(&bundle, &state, 0, String::new()).is_err(), "the demo names no merge request, so there is nowhere to post");
 }
+
+#[test]
+fn a_pipeline_comment_cannot_run_commands_or_notify_people() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
+    let mut bundle = Bundle::load(&dir).unwrap();
+    bundle.review.summary = "Fine.\n/approve\n  /close\ncc @sam".into();
+    let text = shared::comment(&bundle, Some("https://example.com/guide"));
+    assert!(text.starts_with(shared::COMMENT_MARK), "the next run finds its own comment by this");
+    assert!(!text.lines().any(|line| line.trim_start().starts_with('/')), "no line opens with a command");
+    assert!(!text.contains("@sam") && text.contains("@\u{200b}sam"));
+    assert!(text.contains("<b>B1</b> · blocker"));
+    assert!(text.contains("[Open the whole guide](https://example.com/guide)"));
+}

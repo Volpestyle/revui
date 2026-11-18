@@ -8,6 +8,9 @@ anyone opens the change:
   says how revui finds it and how far it trusts it).
 - **As a page.** The job keeps `guide.html`, the same review as one file that opens in
   any browser with no revui, linked from the merge request.
+- **As a comment.** The job posts the guide on the merge request under a bot's name:
+  the summary, then each finding folded under its title. Each push replaces that one
+  comment ("Post it on the merge request", below).
 
 ## Set it up
 
@@ -29,6 +32,23 @@ The job installs revui and Claude Code, runs `revui ci script`, and keeps the fo
 
 A guide is advice. The job is allowed to fail and never blocks the merge request.
 
+## Post it on the merge request
+
+- **GitHub.** The workflow as printed already does: it posts with the run's own token,
+  as `github-actions`. Remove `pull-requests: write` and `GUIDE_POST_TOKEN` from it to
+  write the guide without posting.
+- **GitLab.** Make a project access token with the `api` scope and the Reporter role,
+  and set it as the masked variable `GUIDE_POST_TOKEN`. The token's name is the name
+  the comment appears under. Without it nothing is posted.
+
+The comment links to the whole guide: the page in the job's artifacts on GitLab, the
+run that holds the artifact on GitHub. `GUIDE_LINK` names another address.
+
+What is posted is text a model wrote, under a token that may act on the merge request,
+so `revui ci comment` makes it inert first: a line that opens with `/` would be a
+command on GitLab (`/approve`, `/close`) and `@name` would notify that person, and
+neither survives. `revui ci comment <dir>` prints the comment without posting it.
+
 ## What the reviewer can do
 
 It runs on text other people wrote, with your key, so it is given little:
@@ -38,7 +58,9 @@ It runs on text other people wrote, with your key, so it is given little:
   printed against the diff (`revui check`) and writes the files. An answer that does
   not fit gets one repair pass.
 - **No token for your host.** The bundle is built from the checkout and the variables
-  the host gives the job, so nothing is asked of GitLab's or GitHub's API.
+  the host gives the job, so nothing is asked of GitLab's or GitHub's API. The token
+  that posts the comment is used by the script after the reviewer has finished, and
+  is taken out of the environment before the reviewer starts.
 - **No settings from the checkout.** A `.claude/settings.json` in the merge request
   could carry a hook that runs commands in your job, so none are loaded.
 - **Rules come from the target branch.** Your review rules, system map and sandbox

@@ -4,11 +4,13 @@
 #
 # Add this job to .gitlab-ci.yml (the job name is what revui looks for) and set one masked CI/CD variable:
 #   ANTHROPIC_API_KEY   for the reviewer
+# and, to have the guide posted on the merge request as one comment, replaced on each push:
+#   GUIDE_POST_TOKEN    a project access token with the api scope and the Reporter role. Its name is the commenter's
 #
 # The reviewer reads the checkout and nothing else: no shell, nothing it can write, no settings from the checkout.
-# The job needs no token for GitLab. Merge request pipelines from forks run in the fork by default: keep it that
-# way, since the job spends your key on whatever the branch holds. docs/ci.md has the rest: your own review rules,
-# a system map, tickets, and testing the change in a sandbox.
+# Without GUIDE_POST_TOKEN the job needs no token for GitLab. Merge request pipelines from forks run in the fork
+# by default: keep it that way, since the job spends your key on whatever the branch holds. docs/ci.md has the
+# rest: your own review rules, a system map, tickets, and testing the change in a sandbox.
 revui-guide:
   stage: test
   image: node:24-bookworm

@@ -1861,7 +1861,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some("ci"), Some(which)) => {
             let files = [("script", include_str!("../examples/ci/guide.sh")), ("prompt", include_str!("../examples/ci/guide.md")), ("sandbox", include_str!("../examples/ci/sandbox.md")), ("verify", include_str!("../examples/ci/verify.sh")), ("gitlab", include_str!("../examples/ci/gitlab-ci.yml")), ("github", include_str!("../examples/ci/github-workflow.yml"))];
             let (_, text) = files.iter().find(|(name, _)| name == which).ok_or("usage: revui ci script|prompt|sandbox|verify|gitlab|github, or revui ci comment <dir> [link]")?;
-            return Ok(print!("{text}"));
+            // The jobs name the release they were printed by, so a pipeline runs the revui someone chose.
+            return Ok(print!("{}", text.replace("REVUI_RELEASE", concat!("v", env!("CARGO_PKG_VERSION")))));
         }
         (Some("html"), Some(dir)) => return Ok(println!("{}", html::write(Path::new(dir), args.get(2))?.display())),
         (Some("json"), Some(dir)) => return Ok(println!("{}", shared::json(&Bundle::load(Path::new(dir))?))),

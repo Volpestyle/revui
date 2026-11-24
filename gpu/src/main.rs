@@ -555,6 +555,7 @@ impl App {
 
     fn list(&mut self) {
         self.open = None;
+        host::visit(None);
         match revui(&["list"], None).and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string())) {
             Ok(reviews) => self.reviews = reviews,
             Err(problem) => self.problem = problem,
@@ -563,7 +564,10 @@ impl App {
 
     fn show(&mut self, dir: &str) {
         match Open::load(dir) {
-            Ok(open) => (self.open, self.problem) = (Some(open), String::new()),
+            Ok(open) => {
+                host::visit(Some(&open.dir));
+                (self.open, self.problem) = (Some(open), String::new());
+            }
             Err(problem) => self.problem = problem,
         }
     }

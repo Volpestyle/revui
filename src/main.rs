@@ -1848,10 +1848,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(if failed { 1 } else { 0 });
         }
         (Some("hunks"), Some(dir)) => return Ok(print!("{}", Bundle::load(Path::new(dir))?.hunks())),
-        (Some("web"), Some(_)) => {
-            let named = args[1..].iter().find(|arg| !arg.starts_with("--")).ok_or("usage: revui web <dir | mr url>")?;
-            return web::serve(named);
-        }
+        (Some("web"), _) => return web::cli(&args[1..]),
         // What a pipeline needs to write a guide, kept with the revui that reads it: the job's script, what the
         // reviewer is told, what it is told beside a running sandbox, and the recorder for a sandbox's own steps.
         (Some("ci"), Some(which)) if which == "comment" => {
@@ -2027,7 +2024,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  revui queue             list the merge requests waiting for your review, and make their bundles\n\
                  revui prepare [mr url]  write the guides those are missing, or that one's, with no one watching\n\
                  revui hunks <dir>       list the diff's files and hunk indexes\n\
-                 revui web <dir | mr url>   the same review in a browser, drawn on the GPU (needs the interface built in a checkout: cd gpu && trunk build --release)\n\
+                 revui web [--open] [<dir | mr url>]   the same review in a browser, drawn on the GPU; --open starts or reuses the background server, opens the review URL, and exits (needs gpu/dist built: cd gpu && trunk build --release)\n\
                  revui ci gitlab|github  print a pipeline job that writes the guide for every merge request (docs/ci.md); script, prompt, sandbox and verify print what it runs, and comment <dir> the comment it posts\n\
                  revui html <dir> [out]  write the review as one page, guide.html, that any browser opens with no revui: an artifact a pipeline keeps, or a file to send\n\
                  revui json <dir>        print the review, its diff, your marks and what would go out, for another front end\n\

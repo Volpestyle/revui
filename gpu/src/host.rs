@@ -23,6 +23,8 @@ mod at {
         std::env::args().nth(1)
     }
 
+    pub fn visit(_dir: Option<&str>) {}
+
     pub fn text(dir: &str, path: &str) -> Option<String> {
         std::fs::read_to_string(std::path::Path::new(dir).join(path)).ok()
     }
@@ -78,8 +80,38 @@ mod at {
         }
     }
 
+    fn query_param(search: &str, name: &str) -> Option<String> {
+        let prefix = format!("{name}=");
+        search.trim_start_matches('?').split('&').find_map(|pair| pair.strip_prefix(&prefix)).filter(|value| !value.is_empty()).map(String::from)
+    }
+
     pub fn named() -> Option<String> {
+        if let Some(location) = web_sys::window().map(|window| window.location()) {
+            if let Ok(path) = location.pathname()
+                && let Some(slug) = path.strip_prefix("/r/").map(|slug| slug.trim_end_matches('/')).filter(|slug| !slug.is_empty())
+            {
+                let raw = js_sys::decode_uri_component(slug).ok().map(String::from).unwrap_or_else(|| slug.to_string());
+                return ask("GET", &format!("/api/dir?slug={}", quoted(&raw)), None).ok().filter(|dir| !dir.is_empty());
+            }
+            if let Ok(search) = location.search()
+                && let Some(dir) = query_param(&search, "dir")
+            {
+                return ask("GET", &format!("/api/dir?dir={dir}"), None).ok().filter(|dir| !dir.is_empty());
+            }
+        }
         ask("GET", "/api/dir", None).ok().filter(|dir| !dir.is_empty())
+    }
+
+    pub fn visit(dir: Option<&str>) {
+        let Some(history) = web_sys::window().and_then(|window| window.history().ok()) else { return };
+        let path = match dir {
+            Some(dir) => match ask("GET", &format!("/api/route?dir={}", quoted(dir)), None) {
+                Ok(route) if !route.is_empty() => route,
+                _ => return,
+            },
+            None => "/".to_string(),
+        };
+        let _ = history.replace_state_with_url(&eframe::wasm_bindgen::JsValue::NULL, "", Some(&path));
     }
 
     pub fn text(dir: &str, path: &str) -> Option<String> {

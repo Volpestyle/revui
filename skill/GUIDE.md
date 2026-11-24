@@ -28,6 +28,8 @@ Write the outline to `review.json` in one go, as soon as you understand the shap
 - **Parts** (`sections`): group hunks that belong together, the core of the change first, supporting code next, low-signal churn (renames, generated files, formatting) last. Each part gets one paragraph on why it exists. Place every hunk: split a file across parts by hunk when its hunks serve different purposes. This order is the order you review in and the order the person reads in, so do not change it later.
 - **`working`**: `Reviewing part 1 of N: <title>`.
 
+Once the outline is written, run `revui web --open "$dir"` to pop the browser UI open beside the person while findings stream in (it reuses the background server and returns right away).
+
 ### The map
 
 Right after the outline is in the file, draw where this change sits, so the person sees the system before the findings. Set `working` to `Drawing the map` while you do. Every guide has one: the summary never goes out without a picture of what the change touches. For a change that stays inside one component and moves no call between components (a copy change, a rename, a fix inside one function), draw that component with its direct neighbours, mark it changed, and say in the caption what changes inside it.

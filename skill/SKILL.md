@@ -59,9 +59,11 @@ A diagram explains a finding. It proves nothing: showing that a finding is true 
 - The person asks for one for an item.
 - You are writing a guide and an item is hard to follow in text: the flow crosses several components, the outcome depends on ordering, timing or state, the change has many dependencies, or you needed more than a short paragraph to explain it.
 
-Run nothing for it:
+Run nothing for it; pick the cheapest form that makes the point clear:
 
-- A flow, a sequence or a state change: write Mermaid to `assets/<name>.mmd` and run `revui diagram assets/<name>.mmd assets/<name>.png`. A diagram you reasoned out is `inferred`. Keep the numbered steps as `text` on the same entry.
+- A control-flow delta, call tree, component tree, file layout, pseudocode path, or type/contract change that fits in 5 to 20 lines: put a compact fenced block (` ``` `, ` ```diff `, or ` ```<lang> `, preceded by a blank line) directly in `evidence.text` (or the item's `body`) with no file needed. Keep only the calls, files, props, states, and boundaries that answer the question. A reasoned sketch is `inferred`.
+- A flow, a sequence or a state change across several actors: write Mermaid to `assets/<name>.mmd` and run `revui diagram assets/<name>.mmd assets/<name>.png`. A diagram you reasoned out is `inferred`. Keep the numbered steps as `text` on the same entry.
+- A visual UI mockup, layout or state comparison, or dense diagram that outgrows text and Mermaid: write one focused standalone HTML file to `assets/<name>.html` (use real labels and data from the change; match the product's colors/type/spacing for a UI mockup, or use a clean dark `#16181d` layout for a technical explainer) and capture it with `revui shot assets/<name>.html assets/<name>.png [WIDTHxHEIGHT]`. Attach the PNG as `path` and the `revui shot` command as `repro`. A reasoned HTML diagram or mockup is `inferred`, never `observed`.
 - A bug that is a path through states (a lifecycle, a protocol, a job queue): a statechart, when this session has a skill or tool that model-checks one. Render it to an image. What a model checker verified is `checked`.
 
 Attach the file as an evidence `path` on the item, with a caption that says what it shows. When an entry already says what the diagram shows, set `path` on that entry and keep its text: a second entry with the same caption reads as a duplicate. Images show inline in the viewer; other files open with `o`. One diagram per item unless asked for more. If you cannot draw it here, say what blocked you.

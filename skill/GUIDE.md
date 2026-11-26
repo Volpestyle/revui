@@ -24,9 +24,60 @@ The person is waiting with the viewer open, so get them something to read before
 
 Write the outline to `review.json` in one go, as soon as you understand the shape of the change:
 
-- **Summary**: one short paragraph. What the ticket asks and what the change does, including anything beyond the ask. Then one line naming the part you expect to matter most, so the reader knows where the risk is before the findings arrive. That line is a placeholder: the finished summary replaces it. Also write `plain`: the same in a sentence or two for someone who does not read code, as what changes for the people using the product.
-- **Parts** (`sections`): group hunks that belong together, the core of the change first, supporting code next, low-signal churn (renames, generated files, formatting) last. Each part gets one paragraph on why it exists. Place every hunk: split a file across parts by hunk when its hunks serve different purposes. This order is the order you review in and the order the person reads in, so do not change it later.
+- **Summary**: one short paragraph in plain human language (no jargon or preamble): what the ticket asks and what the change does, including anything beyond the ask. When the change spans several files, reshapes a call flow, alters a UI tree, or changes a schema/contract, add one compact fenced sketch (` ``` ` or ` ```diff `, preceded by a blank line) underneath so the reviewer sees the shape at a glance instead of reading a file-by-file changelog. Then one line naming the part you expect to matter most, so the reader knows where the risk is before the findings arrive. That line is a placeholder: the finished summary replaces it. Also write `plain`: the same in a sentence or two for someone who does not read code, as what changes for the people using the product.
+- **Parts** (`sections`): group hunks that belong together, the core of the change first, supporting code next, low-signal churn (renames, generated files, formatting) last. Each part gets a brief plain explanation of why it exists and what invariant or branch to check, plus a compact fenced sketch when structure or control flow is clearer visually than in prose. Place every hunk: split a file across parts by hunk when its hunks serve different purposes. This order is the order you review in and the order the person reads in, so do not change it later.
 - **`working`**: `Reviewing part 1 of N: <title>`.
+
+### Show the shape instead of walls of prose
+
+Write as one human talking to another: skip preamble, avoid jargon, keep prose brief. When structure, control flow, or a before/after delta is the point, drop a compact fenced block (with a blank line before the opening fence) into `summary`, a part's `why`, a finding's `body`, or `evidence.text`. Pick the smallest shape that makes the point clear, and prune every call, file, prop, or branch that does not matter:
+
+- **Shallow file tree** (one-line responsibility per entry) for refactors or multi-file changes:
+
+      ```diff
+      src/
+      ├── commands/
+      +│   └── show-me.ts       # expands the slash command
+      ├── sessions/
+      -└── transport.ts
+      +└── transport/
+      +    ├── client.ts
+      +    └── stream.ts
+      ```
+
+- **Call tree / call stack** for orchestration, control flow, or tracing a failure path:
+
+      ```diff
+      handleCreateSession
+        validateRequest
+      + enforceQuota
+        SessionStore.insert
+        publish(session.created)
+      ```
+
+- **Component tree** (only the state hooks and module boundaries that matter) for UI changes:
+
+      ```diff
+      <SessionPage> (routes/session.tsx)
+        useSessionEvents()
+        <SessionToolbar>
+      +   <RunSkillButton /> (packages/ui)
+      ```
+
+- **Pseudocode** for branching logic, invariants, race paths, or a suggested fix:
+
+      ```diff
+      on(save)
+      - write content
+      + if content is unchanged
+      +   return cached result
+      + write new content
+      + invalidate cache
+      ```
+
+- **Types, SQL tables, or endpoint contracts** (` ```ts `, ` ```sql `, etc.) when a data shape or contract is the core of the change.
+
+Use ` ```diff ` when the point is what changed inside an existing shape; show the whole block when most of it is new or diff notation would obscure ownership or order. Never force a sketch when two plain sentences are clearer, and omit categories that did not change.
 
 Once the outline is written, run `revui web --open "$dir"` to pop the browser UI open beside the person while findings stream in (it reuses the background server and returns right away).
 
@@ -83,7 +134,7 @@ What comes back is a list of places to look, not findings. Check each against th
 **Write each finding to `review.json` the moment you have it**, then go on. Do not hold findings back to sort or polish them: the person reads the first while you look for the second. When you move to the next part, update `working`.
 
 - **Ids**: by severity, numbered as they are found: `B1`, `F1`, `S1`, `Q1`, with `severity` set to exactly `blocker`, `fix`, `suggestion` or `question` (the format allows any text; guides written with this skill use these four). Good calls are `G1`, `G2`, with no `severity`. An id never changes once it is in the file.
-- **Items**: each under the part whose code it is about, with `at` pointing at the line to fix. Give each a `plain`: one or two sentences on what a person using the product would see, with no file or function names ("A customer can be charged twice for one checkout"). When a finding changes nothing they could see, say that ("Nothing a customer would notice: it makes the next change here harder"). In the body, put what breaks, the path to it, and what to do instead, each under its own `# ` heading. A `Q` about a choice the change made where the ticket was silent is a `decision`.
+- **Items**: each under the part whose code it is about, with `at` pointing at the line to fix. Give each a `plain`: one or two sentences on what a person using the product would see, with no file or function names ("A customer can be charged twice for one checkout"). When a finding changes nothing they could see, say that ("Nothing a customer would notice: it makes the next change here harder"). In the body, put what breaks, the path to it, and what to do instead, each under its own `# ` heading. Prefer a short fenced call tree or ` ```diff ` pseudocode over a dense paragraph when tracing a failure path or showing the fix. A `Q` about a choice the change made where the ticket was silent is a `decision`.
 - **Evidence**: only what you have. Something you worked out by reading is `inferred`. Output of something you ran is `observed`, with the command as `repro` and whole lines of output. Never mark as `observed` what was not run.
 
 ### When to capture evidence before the person asks
@@ -100,7 +151,7 @@ Where a run happens is the person's choice, per repo. `revui drive "$dir"` print
 
 A deployed environment only has merged code. It can show what happens today, before this change. What this change does has to come from its head: a local run, or a preview deploy of the branch.
 
-**Diagrams**: only for the few items that are hard to follow in text (a flow across several components, an outcome that depends on ordering or state): `revui skill` prints how, under "Diagrams".
+**Diagrams**: start with an inline fenced sketch in `body` or `evidence.text` whenever a call tree, component tree, file tree, or pseudocode diff makes the point clear on its own. Reach for a rendered diagram (`revui diagram` for Mermaid, or `revui shot` for a focused HTML explainer/mockup) only for the few items that are still hard to follow in text (a flow across several components, an outcome that depends on ordering or state, or a visual UI comparison): `revui skill` prints how, under "Diagrams".
 
 ## 4. Finish
 

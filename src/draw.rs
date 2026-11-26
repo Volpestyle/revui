@@ -262,10 +262,93 @@ pub fn rich(text: &str, base: Style) -> Vec<Span<'static>> {
     spans
 }
 
+fn fence_open(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix("```")?;
+    (!rest.contains("```")).then(|| rest.trim().split_whitespace().next().unwrap_or(""))
+}
+
+fn render_fence(rows: &mut Rows, lang: &str, lines: &[&str], width: usize, indent: &str, evidence: Option<usize>) {
+    let dim = Style::new().fg(Color::DarkGray);
+    let prefix_w = indent.chars().count() + 2;
+    let room = width.saturating_sub(prefix_w).max(1);
+    let (syntaxes, theme) = syntax();
+    let mut highlighter = match lang {
+        "" | "diff" | "text" | "txt" | "plain" => None,
+        other => syntaxes
+            .find_syntax_by_token(other)
+            .or_else(|| syntaxes.find_syntax_by_extension(other))
+            .map(|language| HighlightLines::new(language, theme)),
+    };
+    for raw in lines {
+        let expanded = raw.replace('\t', "    ");
+        let spans = match (lang, highlighter.as_mut()) {
+            ("diff", _) => {
+                let style = match expanded.as_bytes().first() {
+                    Some(b'+') if !expanded.starts_with("+++") => Style::new().fg(GREEN),
+                    Some(b'-') if !expanded.starts_with("---") => Style::new().fg(RED),
+                    _ => Style::new(),
+                };
+                vec![Span::styled(expanded, style)]
+            }
+            (_, Some(hl)) => {
+                let source = format!("{expanded}\n");
+                let colored = hl.highlight_line(&source, syntaxes).unwrap_or_default();
+                if colored.is_empty() {
+                    vec![Span::raw(expanded)]
+                } else {
+                    colored
+                        .into_iter()
+                        .map(|(style, piece)| {
+                            let color = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+                            Span::styled(piece.trim_end_matches('\n').to_string(), Style::new().fg(color))
+                        })
+                        .collect()
+                }
+            }
+            _ => rich(&expanded, Style::new()),
+        };
+        let cells: Vec<(char, Style)> = spans.iter().flat_map(|s| s.content.chars().map(|c| (c, s.style)).collect::<Vec<_>>()).collect();
+        if cells.is_empty() {
+            rows.push((Line::from(vec![Span::styled(format!("{indent}│"), dim)]), evidence));
+            continue;
+        }
+        for (i, chunk) in cells.chunks(room).enumerate() {
+            let lead = if i == 0 { format!("{indent}│ ") } else { format!("{indent}  ") };
+            let mut out = vec![Span::styled(lead, dim)];
+            for run in chunk.chunk_by(|a, b| a.1 == b.1) {
+                out.push(Span::styled(run.iter().map(|(c, _)| *c).collect::<String>(), run[0].1));
+            }
+            rows.push((Line::from(out), evidence));
+        }
+    }
+}
+
+fn wrap_line(rows: &mut Rows, raw: &str, width: usize, indent: &str, style: Style, evidence: Option<usize>) {
+    for part in wrap(raw, width.saturating_sub(indent.len()).max(1)) {
+        let mut spans = vec![Span::raw(indent.to_string())];
+        spans.extend(rich(&part, style));
+        rows.push((Line::from(spans), evidence));
+    }
+}
+
 pub(crate) fn body(rows: &mut Rows, text: &str, width: usize) {
     let labels = ["What breaks", "Failure path", "Suggest", "Suggestion", "Why it matters", "Impact", "Fix", "Question"];
     let heading = Style::new().fg(accent()).add_modifier(Modifier::BOLD);
+    let mut fence: Option<(&str, Vec<&str>)> = None;
     for line in text.lines() {
+        if let Some((lang, lines)) = fence.as_mut() {
+            if line.trim() == "```" {
+                render_fence(rows, lang, lines, width, "", None);
+                fence = None;
+            } else {
+                lines.push(line);
+            }
+            continue;
+        }
+        if let Some(lang) = fence_open(line) {
+            fence = Some((lang, Vec::new()));
+            continue;
+        }
         let clean = line.trim_start_matches("**");
         let marked = clean.strip_prefix("# ").map(|title| (title.trim_end_matches(['*', ':', '.']), ""));
         let known = labels.iter().find_map(|label| {
@@ -281,18 +364,38 @@ pub(crate) fn body(rows: &mut Rows, text: &str, width: usize) {
                     paragraph(rows, rest, width, "", Style::new(), None);
                 }
             }
-            None => paragraph(rows, line, width, "", Style::new(), None),
+            None => wrap_line(rows, line, width, "", Style::new(), None),
         }
+    }
+    if let Some((lang, lines)) = fence {
+        render_fence(rows, lang, &lines, width, "", None);
     }
 }
 
 fn paragraph(rows: &mut Rows, text: &str, width: usize, indent: &str, style: Style, evidence: Option<usize>) {
-    for raw in text.lines().chain(text.is_empty().then_some("")) {
-        for part in wrap(raw, width.saturating_sub(indent.len()).max(1)) {
-            let mut spans = vec![Span::raw(indent.to_string())];
-            spans.extend(rich(&part, style));
-            rows.push((Line::from(spans), evidence));
+    if text.is_empty() {
+        wrap_line(rows, "", width, indent, style, evidence);
+        return;
+    }
+    let mut fence: Option<(&str, Vec<&str>)> = None;
+    for raw in text.lines() {
+        if let Some((lang, lines)) = fence.as_mut() {
+            if raw.trim() == "```" {
+                render_fence(rows, lang, lines, width, indent, evidence);
+                fence = None;
+            } else {
+                lines.push(raw);
+            }
+            continue;
         }
+        if let Some(lang) = fence_open(raw) {
+            fence = Some((lang, Vec::new()));
+            continue;
+        }
+        wrap_line(rows, raw, width, indent, style, evidence);
+    }
+    if let Some((lang, lines)) = fence {
+        render_fence(rows, lang, &lines, width, indent, evidence);
     }
 }
 
@@ -1376,19 +1479,22 @@ pub fn draw_palette(frame: &mut Frame, all: &[Command], filter: &str, selected: 
 }
 
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
     let mut lines = vec![String::new()];
+    let mut started = false;
     for word in text.split(' ') {
         let mut word: Vec<char> = word.chars().collect();
         let last = lines.last_mut().unwrap();
         let used = last.chars().count();
-        if used > 0 && used + 1 + word.len() <= width {
+        if started && used + 1 + word.len() <= width {
             last.push(' ');
             last.extend(&word);
             continue;
         }
-        if used > 0 {
+        if started {
             lines.push(String::new());
         }
+        started = true;
         while word.len() > width {
             let rest = word.split_off(width);
             lines.last_mut().unwrap().extend(&word);

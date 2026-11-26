@@ -56,10 +56,22 @@ generator then fills in `review.json` and leaves `title` and `sources` as they a
       ]
     }
 
-Text fields are plain text: newlines are kept, markdown is not rendered, so write
-a link as a bare URL. Keep `summary` to two short paragraphs at most. In an item's
-`body`, a line that starts with `# ` is shown as a sub-heading: use it to label the
-parts of a longer finding, each on its own line.
+Text fields are plain text: newlines and leading spaces are kept, and markdown
+is not rendered (write a link as a bare URL), with two exceptions that all
+viewers (terminal, HTML/web, and GPU app) render cleanly:
+
+- In an item's `body`, a line that starts with `# ` is shown as a sub-heading:
+  use it to label the parts of a longer finding, each on its own line.
+- Fenced blocks (` ``` `, ` ```diff `, or ` ```<lang> `) in `summary`, `why`,
+  `body`, or `evidence.text` render with exact indentation preserved, green/red
+  highlighting for `diff` lines (`+` / `-`), and syntax highlighting when a
+  language tag is given. Leave a blank line before an opening fence so pipeline
+  comments and code hosts also render it as code. Use them for compact visual
+  sketches (file trees, call trees, component trees, pseudocode, data shapes)
+  instead of dense prose.
+
+Keep `summary` to two short paragraphs at most, plus one compact fenced sketch
+when it makes the shape of the change clearer than prose.
 
 `plain`, on the review and on each item, says the same thing for a reader who does not
 read code: what a person using the product would see, in a sentence or two, with no
@@ -146,8 +158,9 @@ the person may already be on it.
 
 `path` is relative to the bundle directory. Images render inline; anything else opens
 with the `o` key. `revui diagram <file.mmd> <out.png>` renders Mermaid to an image and
-`revui shot <url or html file> <out.png> [WIDTHxHEIGHT]` screenshots a page in headless
-Chrome. An entry can carry both a `path` and `text`.
+`revui shot <url or html file> <out.png> [WIDTHxHEIGHT]` screenshots a page or a
+standalone HTML diagram/explainer in headless Chrome. An entry can carry both a
+`path` and `text`.
 `text` is shown inline as is, and the viewer wraps it. Keep whole lines: shorten output by choosing lines (`grep`, `head`), never by cutting characters (`cut -c`), which leaves lines that end mid-word. Short command output can go in `text` with no `path`,
 whatever the provenance.
 

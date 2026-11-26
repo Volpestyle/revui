@@ -52,9 +52,23 @@ pub fn points(bundle: &Bundle, state: &State) -> Vec<Point> {
             let (file, line) = item.at.as_ref().map_or((None, None), |at| (Some(at.file.clone()), Some(at.line)));
             let mut parts = Vec::new();
             if quote {
-                let quoted = item.body.trim().lines().map(|line| match line.strip_prefix("# ") {
-                    Some(label) => format!("> **{label}**"),
-                    None => format!("> {line}").trim_end().to_string(),
+                let mut in_fence = false;
+                let quoted = item.body.trim().lines().map(|line| {
+                    let trimmed = line.trim();
+                    if in_fence {
+                        if trimmed == "```" {
+                            in_fence = false;
+                        }
+                        return format!("> {line}").trim_end().to_string();
+                    }
+                    if trimmed.strip_prefix("```").is_some_and(|rest| !rest.contains("```")) {
+                        in_fence = true;
+                        return format!("> {line}").trim_end().to_string();
+                    }
+                    match line.strip_prefix("# ") {
+                        Some(label) => format!("> **{label}**"),
+                        None => format!("> {line}").trim_end().to_string(),
+                    }
                 });
                 parts.push(format!("> **{}**\n>\n{}", item.title, quoted.collect::<Vec<_>>().join("\n")));
             }

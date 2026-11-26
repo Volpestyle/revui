@@ -708,3 +708,54 @@ fn a_pipeline_comment_leaves_code_as_written_and_nothing_else() {
     bundle.review.items[0].title = "`@sam` did it".into();
     assert!(!shared::comment(&bundle, None).contains("@sam"), "a title sits in HTML, where backticks are not code");
 }
+
+#[test]
+fn visual_sketches_keep_indentation_and_fence_styling() {
+    use crate::draw::{wrap, GREEN, RED};
+
+    assert_eq!(wrap("    persistPrompt", 40), ["    persistPrompt"]);
+    assert_eq!(wrap("  foo bar baz", 9), ["  foo bar", "baz"]);
+
+    let mut shown = Rows::new();
+    body(
+        &mut shown,
+        "# Failure path\n\n```diff\n handleCreateSession\n   validateRequest\n+  enforceQuota\n-  skipCheck\n # not a heading\n```\n\n```ts\nfunction retry(n: number): boolean { return n > 0; }\n```",
+        60,
+    );
+    let lines: Vec<String> = shown.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(
+        lines,
+        [
+            "Failure path",
+            "",
+            "│  handleCreateSession",
+            "│    validateRequest",
+            "│ +  enforceQuota",
+            "│ -  skipCheck",
+            "│  # not a heading",
+            "",
+            "│ function retry(n: number): boolean { return n > 0; }",
+        ]
+    );
+    assert_eq!(shown[4].0.spans[1].style.fg, Some(GREEN), "+ lines in diff fences render green");
+    assert_eq!(shown[5].0.spans[1].style.fg, Some(RED), "- lines in diff fences render red");
+    assert_eq!(shown[6].0.spans[0].content, "│ ", "# inside a fence stays inside the block, not a heading");
+    assert!(shown[8].0.spans.len() > 3, "typed fenced blocks are syntax-highlighted");
+
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
+    let mut app = App::new(Bundle::load(&dir).unwrap(), Picker::halfblocks());
+    app.bundle.review.summary = "One line.\n\n```\nsrc/\n  submit.ts\n```".into();
+    let overview: Vec<String> = detail(&app, 60).iter().map(|(line, _)| line.to_string()).collect();
+    assert!(overview.iter().any(|line| line == "│   submit.ts"), "fenced sketches in summary keep indentation: {overview:?}");
+
+    app.bundle.review.items[0].body = "# Path\n\n```diff\n+  retry()\n# comment inside fence\n```\n# Fix\nAdd a key.".into();
+    app.state.verdicts.insert(app.bundle.review.items[0].id.clone(), "agree".into());
+    let points = shared::points(&app.bundle, &app.state);
+    let text = &points[0].text;
+    assert!(
+        text.contains("> **Path**\n>\n> ```diff\n> +  retry()\n> # comment inside fence\n> ```\n> **Fix**"),
+        "quoting keeps # comments inside fences intact: {text}"
+    );
+    let comment = shared::comment(&app.bundle, None);
+    assert!(comment.contains("```diff\n+  retry()\n# comment inside fence\n```"), "pipeline comment keeps fenced sketches intact");
+}

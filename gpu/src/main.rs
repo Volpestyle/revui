@@ -907,45 +907,131 @@ fn line(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) 
     });
 }
 
+fn fence_open(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix("```")?;
+    (!rest.contains("```")).then(|| rest.trim().split_whitespace().next().unwrap_or(""))
+}
+
+/// A fenced block (tree, call stack, pseudocode, diff, or typed snippet), preserving exact indentation.
+fn sketch(ui: &mut egui::Ui, tones: &Tones, lang: &str, lines: &[&str]) {
+    let dark = ui.visuals().dark_mode;
+    let rgb = Color32::from_rgb;
+    let (plus_ink, plus_bg) = if dark { (rgb(95, 196, 138), ADDED) } else { (rgb(31, 138, 76), rgb(238, 248, 241)) };
+    let (minus_ink, minus_bg) = if dark { (rgb(255, 115, 105), REMOVED) } else { (rgb(196, 40, 28), rgb(252, 240, 240)) };
+    let is_diff = lang.eq_ignore_ascii_case("diff");
+    let frame = egui::Frame::new()
+        .fill(tones.pane)
+        .stroke(Stroke::new(1.0, tones.line))
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(12, 9))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::horizontal().auto_shrink([false, true]).show(ui, |ui| {
+                let mut job = egui::text::LayoutJob::default();
+                for (i, raw) in lines.iter().enumerate() {
+                    if i > 0 {
+                        job.append("\n", 0.0, egui::TextFormat { font_id: mono(12.5), line_height: Some(19.0), ..Default::default() });
+                    }
+                    let expanded = raw.replace('\t', "    ");
+                    let (color, background) = if is_diff && expanded.starts_with('+') && !expanded.starts_with("+++") {
+                        (plus_ink, plus_bg)
+                    } else if is_diff && expanded.starts_with('-') && !expanded.starts_with("---") {
+                        (minus_ink, minus_bg)
+                    } else {
+                        (tones.strong, Color32::TRANSPARENT)
+                    };
+                    job.append(&expanded, 0.0, egui::TextFormat { font_id: mono(12.5), color, background, line_height: Some(19.0), ..Default::default() });
+                }
+                ui.add(egui::Label::new(job).selectable(true).extend());
+            });
+        });
+    ui.painter().rect_filled(egui::Rect::from_min_size(frame.response.rect.min, egui::vec2(2.0, frame.response.rect.height())), 0.0, tones.faint);
+    ui.add_space(10.0);
+}
+
 fn prose(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
     prose_at(ui, tones, links, text, 15.5);
 }
 
 fn prose_at(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str, size: f32) {
     let roomy = size >= 15.0;
+    enum Part<'a> {
+        Prose(Vec<&'a str>),
+        Fence(&'a str, Vec<&'a str>),
+    }
+    let mut parts: Vec<Part> = Vec::new();
+    let mut current_prose: Vec<&str> = Vec::new();
+    let mut current_fence: Option<(&str, Vec<&str>)> = None;
+    for raw in text.trim().lines() {
+        if let Some((_, lines)) = current_fence.as_mut() {
+            if raw.trim() == "```" {
+                let (lang, lines) = current_fence.take().unwrap();
+                parts.push(Part::Fence(lang, lines));
+            } else {
+                lines.push(raw);
+            }
+            continue;
+        }
+        if let Some(lang) = fence_open(raw) {
+            if !current_prose.is_empty() {
+                parts.push(Part::Prose(std::mem::take(&mut current_prose)));
+            }
+            current_fence = Some((lang, Vec::new()));
+            continue;
+        }
+        current_prose.push(raw);
+    }
+    if let Some((lang, lines)) = current_fence {
+        parts.push(Part::Fence(lang, lines));
+    } else if !current_prose.is_empty() {
+        parts.push(Part::Prose(current_prose));
+    }
     ui.scope(|ui| {
         ui.set_max_width(800.0_f32.min(ui.available_width()));
         ui.spacing_mut().item_spacing.y = 0.0;
-        let blocks = text.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") }));
-        for (n, block) in blocks.enumerate() {
-            let mut lines = block.lines().peekable();
-            if let Some(heading) = lines.peek().and_then(|line| line.strip_prefix("# ")) {
-                match roomy {
-                    true => head(ui, tones, heading),
-                    false => {
-                        ui.add_space(if n == 0 { 0.0 } else { 6.0 });
-                        ui.label(RichText::new(heading).font(display(size + 1.5)).line_height(Some(leading(size))).color(tones.strong));
-                        ui.add_space(4.0);
+        let mut index = 0usize;
+        for part in parts {
+            match part {
+                Part::Fence(lang, lines) => {
+                    sketch(ui, tones, lang, &lines);
+                    index += 1;
+                }
+                Part::Prose(lines) => {
+                    let joined = lines.join("\n");
+                    let blocks = joined.trim().split("\n\n").flat_map(|block| block.split("\n# ").enumerate().map(|(n, part)| if n == 0 { part.to_string() } else { format!("# {part}") }));
+                    for block in blocks {
+                        let mut lines = block.lines().peekable();
+                        if let Some(heading) = lines.peek().and_then(|line| line.strip_prefix("# ")) {
+                            match roomy {
+                                true => head(ui, tones, heading),
+                                false => {
+                                    ui.add_space(if index == 0 { 0.0 } else { 6.0 });
+                                    ui.label(RichText::new(heading).font(display(size + 1.5)).line_height(Some(leading(size))).color(tones.strong));
+                                    ui.add_space(4.0);
+                                }
+                            }
+                            lines.next();
+                        }
+                        let mut after = 0.0;
+                        for line in lines.filter(|line| !line.trim().is_empty()) {
+                            let (mark, rest) = line.trim_start().split_once(' ').unwrap_or(("", line));
+                            let listed = mark == "-" || mark == "*" || mark.strip_suffix('.').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+                            ui.add_space(after);
+                            if listed {
+                                ui.horizontal_top(|ui| {
+                                    ui.add_sized([if roomy { 24.0 } else { 18.0 }, leading(size)], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).size(size).color(tones.text)));
+                                    self::line(ui, tones, links, rest, size);
+                                });
+                            } else {
+                                self::line(ui, tones, links, line, size);
+                            }
+                            after = if listed { 4.0 } else { 0.0 };
+                        }
+                        ui.add_space(10.0);
+                        index += 1;
                     }
                 }
-                lines.next();
             }
-            let mut after = 0.0;
-            for line in lines.filter(|line| !line.trim().is_empty()) {
-                let (mark, rest) = line.trim_start().split_once(' ').unwrap_or(("", line));
-                let listed = mark == "-" || mark == "*" || mark.strip_suffix('.').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-                ui.add_space(after);
-                if listed {
-                    ui.horizontal_top(|ui| {
-                        ui.add_sized([if roomy { 24.0 } else { 18.0 }, leading(size)], egui::Label::new(RichText::new(if mark.ends_with('.') { mark } else { "•" }).size(size).color(tones.text)));
-                        self::line(ui, tones, links, rest, size);
-                    });
-                } else {
-                    self::line(ui, tones, links, line, size);
-                }
-                after = if listed { 4.0 } else { 0.0 };
-            }
-            ui.add_space(10.0);
         }
     });
 }
@@ -958,19 +1044,9 @@ fn button(ui: &mut egui::Ui, tones: &Tones, label: &str, on: bool) -> egui::Resp
     fx::touch(ui, made, ink)
 }
 
-/// What the agent said: prose as the cards set it, and what it fenced as code on a dark slab.
+/// What the agent said: prose and fenced sketches/code set the same way the cards render them.
 fn reply(ui: &mut egui::Ui, tones: &Tones, links: &Links, text: &str) {
-    for (n, part) in text.split("```").enumerate() {
-        if n % 2 == 1 {
-            let code = part.split_once('\n').map_or(part, |(_, code)| code).trim_end();
-            egui::Frame::new().fill(INK).inner_margin(10.0).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(code).font(mono(12.0)).color(ON_INK)).selectable(true));
-            });
-        } else if !part.trim().is_empty() {
-            prose_at(ui, tones, links, part, 13.5);
-        }
-    }
+    prose_at(ui, tones, links, text, 13.5);
 }
 
 /// A run of the agent's tool calls rolled up into one line. It opens to the calls, and each call opens to what it

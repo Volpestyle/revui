@@ -136,6 +136,12 @@ summary::-webkit-details-marker { display: none; }
 summary::before { content: ""; display: inline-block; width: 0; height: 0; border-style: solid; border-width: 3.5px 0 3.5px 5px; border-color: transparent transparent transparent var(--faint); margin: 0 8px 1px 2px; transition: transform 0.12s; }
 details[open] > summary::before { transform: rotate(90deg); }
 .trace { background: var(--pane); border-radius: 8px; padding: 10px 12px 2px; margin-top: 8px; font-size: 14px; }
+.sketch { margin: 8px 0 12px; padding: 10px 14px; background: var(--pane); border: 1px solid var(--line); border-left: 2px solid var(--faint); border-radius: 8px; font-size: 12.5px; line-height: 1.55; overflow-x: auto; white-space: pre; }
+.sketch .sline { display: block; padding: 0 4px; margin: 0 -4px; border-radius: 3px; }
+.sketch .sline.add { background: var(--add); color: var(--plus); }
+.sketch .sline.del { background: var(--del); color: var(--minus); }
+.sketch .k { color: var(--k); } .sketch .s { color: var(--s); } .sketch .n { color: var(--n); } .sketch .c { color: var(--c); font-style: italic; }
+.sketch .f { color: var(--f); } .sketch .t { color: var(--t); } .sketch .p { color: var(--p); } .sketch .g { color: var(--g); }
 figure { margin: 0; }
 .diagram { border: 1px solid var(--line); border-radius: 12px; padding: 14px; overflow: hidden; text-align: center; background: var(--bg); }
 .diagram img { max-width: 100%; border-radius: 8px; }
@@ -288,10 +294,33 @@ const inline = (text) =>
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 
-// The guide's text uses a small part of Markdown: "# " headings, "- " and "1. " lists, backticks, bold.
+// The guide's text uses a small part of Markdown: "# " headings, "- " and "1. " lists, backticks, bold, and fenced
+// blocks (``` / ```diff / ```<lang>) for compact visual sketches (trees, call stacks, pseudocode, data shapes).
+const renderFence = (lang, lines) => {
+    const tag = (lang || '').toLowerCase();
+    if (tag === 'diff') {
+        const body = lines
+            .map((raw) => {
+                const kind =
+                    raw.startsWith('+') && !raw.startsWith('+++')
+                        ? ' add'
+                        : raw.startsWith('-') && !raw.startsWith('---')
+                          ? ' del'
+                          : '';
+                return `<span class="sline${kind}">${escape(raw) || ' '}</span>`;
+            })
+            .join('');
+        return `<pre class="sketch">${body}</pre>`;
+    }
+    const syntax = tag && !['text', 'txt', 'plain'].includes(tag) ? languages[byExtension[tag] ?? tag] : null;
+    const body = lines.map((raw) => (syntax ? paint(raw, syntax) : escape(raw))).join('\n');
+    return `<pre class="sketch">${body}</pre>`;
+};
+
 const prose = (text) => {
     const out = [];
     let list = null;
+    let fence = null;
 
     const close = () => {
         if (list) out.push(`</${list}>`);
@@ -299,6 +328,23 @@ const prose = (text) => {
     };
 
     for (const line of String(text ?? '').split('\n')) {
+        const trimmed = line.trim();
+        if (fence) {
+            if (trimmed === '```') {
+                out.push(renderFence(fence.lang, fence.lines));
+                fence = null;
+            } else {
+                fence.lines.push(line);
+            }
+            continue;
+        }
+        const open = trimmed.match(/^```([^\s`]*)\s*$/);
+        if (open) {
+            close();
+            fence = { lang: open[1], lines: [] };
+            continue;
+        }
+
         const heading = line.match(/^#+\s+(.*)/);
         const bullet = line.match(/^\s*[-*]\s+(.*)/);
         const numbered = line.match(/^\s*\d+[.)]\s+(.*)/);
@@ -316,7 +362,7 @@ const prose = (text) => {
             }
 
             out.push(`<li>${inline((bullet ?? numbered)[1])}</li>`);
-        } else if (line.trim()) {
+        } else if (trimmed) {
             close();
             out.push(`<p>${inline(line)}</p>`);
         } else {
@@ -324,6 +370,7 @@ const prose = (text) => {
         }
     }
 
+    if (fence) out.push(renderFence(fence.lang, fence.lines));
     close();
 
     return out.join('\n');
